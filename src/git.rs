@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::error::Error;
 
@@ -295,11 +295,22 @@ pub fn config_get_all(repo: &Path, key: &str) -> Result<Vec<String>> {
             message: e.to_string(),
             stderr: String::new(),
         })?;
-    // exit 1 means key not found, which is not an error here
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect())
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect());
+    }
+    // exit 1 with no output means key not found — not an error
+    if out.status.code() == Some(1) && out.stdout.is_empty() {
+        return Ok(vec![]);
+    }
+    Err(Error::Git {
+        repo: repo.display().to_string(),
+        message: format!("git config --get-all {key} failed"),
+        stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+    }
+    .into())
 }
 
 pub fn fetch(repo: &Path) -> Result<()> {
@@ -314,23 +325,45 @@ pub fn fetch(repo: &Path) -> Result<()> {
 }
 
 pub fn repo_root() -> Result<String> {
+    let cwd = Path::new(".");
     let out = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
-        .output()?;
+        .output()
+        .map_err(|e| Error::Git {
+            repo: cwd.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     } else {
-        bail!("not inside a git repository");
+        Err(Error::Git {
+            repo: cwd.display().to_string(),
+            message: "not inside a git repository".to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+        }
+        .into())
     }
 }
 
 pub fn git_dir() -> Result<String> {
+    let cwd = Path::new(".");
     let out = Command::new("git")
         .args(["rev-parse", "--git-dir"])
-        .output()?;
+        .output()
+        .map_err(|e| Error::Git {
+            repo: cwd.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     } else {
-        bail!("not inside a git repository");
+        Err(Error::Git {
+            repo: cwd.display().to_string(),
+            message: "not inside a git repository".to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+        }
+        .into())
     }
 }

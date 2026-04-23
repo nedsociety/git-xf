@@ -21,17 +21,16 @@ impl Cache {
     pub fn ensure_initialized(&self, target_url: &str) -> Result<()> {
         if self.path.exists() {
             // Verify the directory is actually a valid bare git repo.
-            let ok = Command::new("git")
+            let out = Command::new("git")
                 .arg("-C")
                 .arg(&self.path)
                 .args(["rev-parse", "--git-dir"])
-                .output()?
-                .status
-                .success();
-            if !ok {
+                .output()?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim_end().to_string();
                 bail!(
-                    "cache at {} exists but is not a valid git repository; \
-                     delete it and re-run `git xf init`",
+                    "cache at {} exists but is not a valid git repository \
+                     (delete it and re-run `git xf init`): {stderr}",
                     self.path.display()
                 );
             }
