@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::git;
 
@@ -19,15 +20,40 @@ impl Cache {
 
     pub fn ensure_initialized(&self, target_url: &str) -> Result<()> {
         if self.path.exists() {
+            // Verify the directory is actually a valid bare git repo.
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&self.path)
+                .args(["rev-parse", "--git-dir"])
+                .output()?
+                .status
+                .success();
+            if !ok {
+                bail!(
+                    "cache at {} exists but is not a valid git repository; \
+                     delete it and re-run `git xf init`",
+                    self.path.display()
+                );
+            }
+            self.ensure_fetch_refspec()?;
             return Ok(());
         }
         std::fs::create_dir_all(self.path.parent().unwrap())?;
         git::clone_bare(target_url, &self.path)?;
-        git::config_add(
-            &self.path,
-            "remote.origin.fetch",
-            &format!("+refs/git-xf/{name}/*:refs/git-xf/{name}/*", name = self.name),
-        )?;
+        self.ensure_fetch_refspec()?;
+        Ok(())
+    }
+
+    /// Adds the mapping fetch refspec if it is not already configured.
+    fn ensure_fetch_refspec(&self) -> Result<()> {
+        let expected = format!(
+            "+refs/git-xf/{name}/*:refs/git-xf/{name}/*",
+            name = self.name
+        );
+        let existing = git::config_get_all(&self.path, "remote.origin.fetch")?;
+        if !existing.iter().any(|v| v == &expected) {
+            git::config_add(&self.path, "remote.origin.fetch", &expected)?;
+        }
         Ok(())
     }
 

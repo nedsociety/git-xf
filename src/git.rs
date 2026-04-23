@@ -3,14 +3,23 @@ use std::process::Command;
 
 use anyhow::{bail, Result};
 
-fn run(cmd: &mut Command) -> Result<String> {
-    let out = cmd.output()?;
+use crate::error::Error;
+
+fn run(cmd: &mut Command, repo: &Path) -> Result<String> {
+    let out = cmd.output().map_err(|e| Error::Git {
+        repo: repo.display().to_string(),
+        message: e.to_string(),
+        stderr: String::new(),
+    })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim_end().to_string();
-        let program = format!("{:?}", cmd.get_program());
-        bail!("{program} failed: {stderr}");
+        Err(Error::Git {
+            repo: repo.display().to_string(),
+            message: format!("{:?} failed", cmd.get_program()),
+            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+        }
+        .into())
     }
 }
 
@@ -26,18 +35,24 @@ pub struct CommitInfo {
 }
 
 pub fn resolve_ref(repo: &Path, refname: &str) -> Result<String> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--verify", refname]))
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", "--verify", refname]),
+        repo,
+    )
 }
 
 pub fn commit_info(repo: &Path, sha: &str) -> Result<CommitInfo> {
     let fmt = "%P%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%B";
-    let raw = run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["show", "-s", &format!("--format={fmt}"), sha]))?;
+    let raw = run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["show", "-s", &format!("--format={fmt}"), sha]),
+        repo,
+    )?;
 
     let mut lines = raw.splitn(8, '\n');
     let parents_line = lines.next().unwrap_or("").trim().to_string();
@@ -60,43 +75,58 @@ pub fn commit_info(repo: &Path, sha: &str) -> Result<CommitInfo> {
 }
 
 pub fn worktree_add(repo: &Path, wt_path: &Path, sha: &str) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "add"])
-        .arg(wt_path)
-        .arg(sha))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "add"])
+            .arg(wt_path)
+            .arg(sha),
+        repo,
+    )?;
     Ok(())
 }
 
 pub fn worktree_add_orphan(repo: &Path, wt_path: &Path, branch: &str) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "add", "--orphan", "-b", branch])
-        .arg(wt_path))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "add", "--orphan", "-b", branch])
+            .arg(wt_path),
+        repo,
+    )?;
     Ok(())
 }
 
 pub fn worktree_remove_force(repo: &Path, wt_path: &Path) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "remove", "--force"])
-        .arg(wt_path))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "remove", "--force"])
+            .arg(wt_path),
+        repo,
+    )?;
     Ok(())
 }
 
 pub fn worktree_prune(repo: &Path) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "prune"]))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "prune"]),
+        repo,
+    )?;
     Ok(())
 }
 
 pub fn write_tree(wt_path: &Path) -> Result<String> {
-    run(Command::new("git").arg("-C").arg(wt_path).arg("write-tree"))
+    run(
+        Command::new("git").arg("-C").arg(wt_path).arg("write-tree"),
+        wt_path,
+    )
 }
 
 pub struct CommitTreeArgs<'a> {
@@ -128,22 +158,28 @@ pub fn commit_tree(args: CommitTreeArgs<'_>) -> Result<String> {
         .env("GIT_COMMITTER_NAME", args.committer_name)
         .env("GIT_COMMITTER_EMAIL", args.committer_email)
         .env("GIT_COMMITTER_DATE", args.committer_date);
-    run(&mut cmd)
+    run(&mut cmd, args.repo)
 }
 
 pub fn update_ref(repo: &Path, refname: &str, sha: &str) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["update-ref", refname, sha]))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["update-ref", refname, sha]),
+        repo,
+    )?;
     Ok(())
 }
 
 pub fn delete_ref(repo: &Path, refname: &str) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["update-ref", "-d", refname]))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["update-ref", "-d", refname]),
+        repo,
+    )?;
     Ok(())
 }
 
@@ -152,7 +188,12 @@ pub fn read_ref(repo: &Path, refname: &str) -> Result<Option<String>> {
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "--verify", refname])
-        .output()?;
+        .output()
+        .map_err(|e| Error::Git {
+            repo: repo.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
     if out.status.success() {
         Ok(Some(
             String::from_utf8_lossy(&out.stdout)
@@ -173,7 +214,7 @@ pub fn push(repo: &Path, refspecs: &[String]) -> Result<()> {
     for rs in refspecs {
         cmd.arg(rs);
     }
-    run(&mut cmd)?;
+    run(&mut cmd, repo)?;
     Ok(())
 }
 
@@ -187,24 +228,28 @@ pub fn git_add_all(wt_path: &Path, paths: &[String]) -> Result<()> {
             cmd.arg(p);
         }
     }
-    run(&mut cmd)?;
+    run(&mut cmd, wt_path)?;
     Ok(())
 }
 
 pub fn commit_tree_sha(repo: &Path, sha: &str) -> Result<String> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", &format!("{sha}^{{tree}}")])
-        )
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", &format!("{sha}^{{tree}}")]),
+        repo,
+    )
 }
 
 pub fn log_ancestry(repo: &Path, sha: &str) -> Result<Vec<(String, Vec<String>)>> {
-    // Returns (sha, parents) pairs reachable from sha, in reverse-chronological order.
-    let out = run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["log", "--format=%H %P", sha]))?;
+    let out = run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["log", "--format=%H %P", sha]),
+        repo,
+    )?;
     let mut result = Vec::new();
     for line in out.lines() {
         let mut parts = line.split_whitespace();
@@ -218,24 +263,53 @@ pub fn log_ancestry(repo: &Path, sha: &str) -> Result<Vec<(String, Vec<String>)>
 }
 
 pub fn clone_bare(target_url: &str, dest: &Path) -> Result<()> {
-    run(Command::new("git").args(["clone", "--bare", "--filter=tree:0", target_url])
-        .arg(dest))?;
+    run(
+        Command::new("git")
+            .args(["clone", "--bare", "--filter=tree:0", target_url])
+            .arg(dest),
+        dest,
+    )?;
     Ok(())
 }
 
 pub fn config_add(repo: &Path, key: &str, value: &str) -> Result<()> {
-    run(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["config", "--add", key, value]))?;
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["config", "--add", key, value]),
+        repo,
+    )?;
     Ok(())
 }
 
-pub fn fetch(repo: &Path) -> Result<()> {
-    run(Command::new("git")
+/// Returns all values for the given config key; empty vec if the key is absent.
+pub fn config_get_all(repo: &Path, key: &str) -> Result<Vec<String>> {
+    let out = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["fetch", "--filter=tree:0", "origin"]))?;
+        .args(["config", "--get-all", key])
+        .output()
+        .map_err(|e| Error::Git {
+            repo: repo.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
+    // exit 1 means key not found, which is not an error here
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+pub fn fetch(repo: &Path) -> Result<()> {
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["fetch", "--filter=tree:0", "origin"]),
+        repo,
+    )?;
     Ok(())
 }
 
