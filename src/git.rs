@@ -432,6 +432,32 @@ pub fn repo_root() -> Result<String> {
     }
 }
 
+/// Returns the common git directory — the one that contains `hooks/`, `config`,
+/// etc.  In a linked worktree `--git-dir` points to `.git/worktrees/<name>`,
+/// while `--git-common-dir` always points to the root `.git`.  In a normal
+/// (non-worktree) checkout the two values are identical.
+pub fn git_common_dir() -> Result<String> {
+    let cwd = Path::new(".");
+    let out = Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .output()
+        .map_err(|e| Error::Git {
+            repo: cwd.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    } else {
+        Err(Error::Git {
+            repo: cwd.display().to_string(),
+            message: "not inside a git repository".to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+        }
+        .into())
+    }
+}
+
 pub fn git_dir() -> Result<String> {
     let cwd = Path::new(".");
     let out = Command::new("git")

@@ -41,12 +41,10 @@ async fn main() -> Result<()> {
         }
         Commands::Hook { command } => match command {
             HookCommands::Install => {
-                let (_, git_dir) = locate_repo()?;
-                hook::install(&git_dir)?;
+                hook::install(&common_git_dir()?)?;
             }
             HookCommands::Uninstall => {
-                let (_, git_dir) = locate_repo()?;
-                hook::uninstall(&git_dir)?;
+                hook::uninstall(&common_git_dir()?)?;
             }
             HookCommands::Run => {
                 let (source_repo, git_dir) = locate_repo()?;
@@ -57,6 +55,16 @@ async fn main() -> Result<()> {
         },
     }
     Ok(())
+}
+
+fn common_git_dir() -> Result<PathBuf> {
+    let source_repo = PathBuf::from(git::repo_root()?);
+    let raw = git::git_common_dir()?;
+    Ok(if Path::new(&raw).is_absolute() {
+        PathBuf::from(raw)
+    } else {
+        source_repo.join(raw)
+    })
 }
 
 fn locate_repo() -> Result<(PathBuf, PathBuf)> {
