@@ -34,8 +34,9 @@ async fn main() -> Result<()> {
             todo!("init")
         }
         Commands::Status { branch } => {
-            let _ = branch;
-            todo!("status")
+            let (source_repo, git_dir) = locate_repo()?;
+            let config = config::load(&source_repo)?;
+            status::run(&source_repo, &git_dir, &config, branch.as_deref())?;
         }
         Commands::Hook { command } => match command {
             HookCommands::Install => todo!("hook install"),

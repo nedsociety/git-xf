@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -334,6 +335,76 @@ pub fn for_each_ref(repo: &Path, prefixes: &[&str]) -> Result<Vec<(String, Strin
         let sha = if deref_sha.is_empty() { obj_sha } else { deref_sha };
         if !sha.is_empty() {
             result.push((refname.to_string(), sha.to_string()));
+        }
+    }
+    Ok(result)
+}
+
+/// Returns the short name of the branch HEAD points to, or `None` for
+/// detached HEAD.
+pub fn current_branch(repo: &Path) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .map_err(|e| Error::Git {
+            repo: repo.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
+    if out.status.success() {
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Returns `(full_sha, subject_line)` for every commit reachable from
+/// `refname`, in reverse-chronological order.
+pub fn log_commits(repo: &Path, refname: &str) -> Result<Vec<(String, String)>> {
+    let out = run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["log", "--format=%H\t%s", refname]),
+        repo,
+    )?;
+    let mut result = Vec::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let sha = parts.next().unwrap_or("").to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        if !sha.is_empty() {
+            result.push((sha, subject));
+        }
+    }
+    Ok(result)
+}
+
+/// Returns `full_sha → subject_line` for the given commits (no parent
+/// traversal).  Reads all commits in one subprocess.
+pub fn commit_subjects(repo: &Path, shas: &[&str]) -> Result<HashMap<String, String>> {
+    if shas.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(repo)
+        .args(["log", "--no-walk", "--format=%H\t%s"]);
+    for sha in shas {
+        cmd.arg(sha);
+    }
+    let out = run(&mut cmd, repo)?;
+    let mut result = HashMap::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let sha = parts.next().unwrap_or("").to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        if !sha.is_empty() {
+            result.insert(sha, subject);
         }
     }
     Ok(result)
