@@ -34,10 +34,6 @@ pub async fn run(
 
 // ── per-transformation sync ───────────────────────────────────────────────
 
-struct Tip {
-    sha: String,
-}
-
 async fn sync_one(
     source_repo: &Path,
     git_dir: &Path,
@@ -51,10 +47,11 @@ async fn sync_one(
     cache.ensure_initialized(&cfg.target)?;
     cache.fetch_and_prune()?;
 
-    let tips = resolve_tips(source_repo, refs)?;
+    let tip_shas = resolve_tips(source_repo, refs)?;
 
     // ── walk the DAG to find commits not yet in the cache ─────────────────
-    let (missing, init_mappings) = find_missing(source_repo, &cache, &tips)?;
+    let pre_mapped = cache.all_mappings()?;
+    let (missing, init_mappings) = find_missing(source_repo, &pre_mapped, &tip_shas)?;
 
     if dry_run {
         if missing.is_empty() {
@@ -84,10 +81,10 @@ async fn sync_one(
     }
 
     // ── mirror branches/tags from source whose tips are mapped in cache ───
-    // Query the cache directly so pre-existing mappings outside this run's
-    // BFS subgraph are also picked up.  This also runs when missing is empty,
-    // so a newly created branch pointing to an already-mapped commit is
-    // propagated without requiring a fresh commit to be transformed.
+    // Reload all mappings in one subprocess (dispatch may have added new ones).
+    // This also runs when missing is empty, so a newly created branch pointing
+    // to an already-mapped commit is propagated without transforming new commits.
+    let post_mapped = cache.all_mappings()?;
     let mut refspecs: Vec<String> = missing
         .keys()
         .map(|sha| {
@@ -98,8 +95,8 @@ async fn sync_one(
     for (refname, src_sha) in
         git::for_each_ref(source_repo, &["refs/heads/", "refs/tags/"])?
     {
-        if let Some(target_sha) = cache.mapping(&src_sha)? {
-            git::update_ref(&cache.path, &refname, &target_sha)?;
+        if let Some(target_sha) = post_mapped.get(&src_sha) {
+            git::update_ref(&cache.path, &refname, target_sha)?;
             refspecs.push(format!("{refname}:{refname}"));
         }
     }
@@ -113,16 +110,13 @@ async fn sync_one(
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<Tip>> {
+fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<String>> {
     refs.iter()
-        .map(|r| {
-            let sha = git::resolve_ref(source_repo, r)?;
-            Ok(Tip { sha })
-        })
+        .map(|r| git::resolve_ref(source_repo, r))
         .collect()
 }
 
-/// BFS from `tips`, collecting commits not yet present in `cache`.
+/// BFS from `tips`, collecting commits not yet present in `cached`.
 ///
 /// Returns:
 /// - `missing`: source SHA → source parent SHAs (commits that need transforming)
@@ -130,8 +124,8 @@ fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<Tip>> {
 ///              seed the mapping table for the parallel dispatch)
 fn find_missing(
     source_repo: &Path,
-    cache: &Cache,
-    tips: &[Tip],
+    cached: &HashMap<String, String>,
+    tips: &[String],
 ) -> Result<(HashMap<String, Vec<String>>, HashMap<String, String>)> {
     let mut missing: HashMap<String, Vec<String>> = HashMap::new();
     let mut known: HashMap<String, String> = HashMap::new();
@@ -139,14 +133,14 @@ fn find_missing(
     let mut visited: HashSet<String> = HashSet::new();
 
     for tip in tips {
-        if visited.insert(tip.sha.clone()) {
-            queue.push_back(tip.sha.clone());
+        if visited.insert(tip.clone()) {
+            queue.push_back(tip.clone());
         }
     }
 
     while let Some(sha) = queue.pop_front() {
-        if let Some(target_sha) = cache.mapping(&sha)? {
-            known.insert(sha, target_sha);
+        if let Some(target_sha) = cached.get(&sha) {
+            known.insert(sha, target_sha.clone());
             continue; // already done; don't recurse further
         }
         let info = git::commit_info(source_repo, &sha)?;
@@ -199,14 +193,14 @@ fn topo_order(missing: &HashMap<String, Vec<String>>) -> Vec<String> {
             }
         }
     }
+    debug_assert_eq!(order.len(), missing.len(), "topo_order: incomplete — cycle in graph?");
     order
 }
 
 // ── parallel dispatch ─────────────────────────────────────────────────────
 
 /// Transforms all commits in `missing` in parallel (bounded by `jobs`),
-/// respecting topological order.  Returns a combined mapping of every
-/// source SHA encountered (pre-existing `init_mappings` plus newly computed).
+/// respecting topological order.
 async fn dispatch(
     source_repo: PathBuf,
     git_dir: PathBuf,
@@ -216,7 +210,7 @@ async fn dispatch(
     missing: &HashMap<String, Vec<String>>,
     init_mappings: HashMap<String, String>,
     jobs: usize,
-) -> Result<HashMap<String, String>> {
+) -> Result<()> {
     // Build Kahn's in-degree and parent→children maps (within the missing set).
     let mut in_degree: HashMap<String, usize> =
         missing.keys().map(|k| (k.clone(), 0usize)).collect();
@@ -320,5 +314,5 @@ async fn dispatch(
     }
 
     drop(done_tx);
-    Ok(Arc::try_unwrap(shared).unwrap().into_inner().unwrap())
+    Ok(())
 }

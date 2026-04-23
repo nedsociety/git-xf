@@ -1,5 +1,16 @@
 use clap::{Parser, Subcommand};
 
+fn parse_jobs(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("`{s}` is not a valid number"))?;
+    if n < 1 {
+        Err("--jobs must be at least 1".to_string())
+    } else {
+        Ok(n)
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "git-xf", about = "Transform git repositories commit-by-commit")]
 pub struct Cli {
@@ -14,7 +25,7 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Maximum parallel workers (default: logical CPU count)
-        #[arg(long, short)]
+        #[arg(long, short, value_parser = parse_jobs)]
         jobs: Option<usize>,
         /// Refs to sync (default: HEAD)
         refs: Vec<String>,

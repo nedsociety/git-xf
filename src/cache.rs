@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -72,5 +73,20 @@ impl Cache {
 
     pub fn mapping_ref(&self, source_sha: &str) -> String {
         format!("refs/git-xf/{}/{}", self.name, source_sha)
+    }
+
+    /// Loads every cached mapping for this transformation in one subprocess.
+    /// Returns `source_sha → target_sha`.
+    pub fn all_mappings(&self) -> Result<HashMap<String, String>> {
+        let prefix = format!("refs/git-xf/{}/", self.name);
+        let refs = git::for_each_ref(&self.path, &[prefix.as_str()])?;
+        Ok(refs
+            .into_iter()
+            .filter_map(|(refname, target_sha)| {
+                refname
+                    .strip_prefix(&prefix)
+                    .map(|src_sha| (src_sha.to_string(), target_sha))
+            })
+            .collect())
     }
 }

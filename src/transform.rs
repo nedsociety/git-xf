@@ -280,6 +280,10 @@ fn recreate_symlink(src: &Path, tgt: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn recreate_symlink(src: &Path, tgt: &Path) -> Result<()> {
+    eprintln!(
+        "warning: symlink {} cannot be recreated on this platform; copying file content instead",
+        src.display()
+    );
     std::fs::copy(src, tgt)?;
     Ok(())
 }
