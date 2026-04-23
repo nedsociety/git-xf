@@ -175,21 +175,27 @@ pub fn read_ref(repo: &Path, refname: &str) -> Result<Option<String>> {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["rev-parse", "--verify", refname])
+        .args(["rev-parse", "--quiet", "--verify", refname])
         .output()
         .map_err(|e| Error::Git {
             repo: repo.display().to_string(),
             message: e.to_string(),
             stderr: String::new(),
         })?;
-    if out.status.success() {
-        Ok(Some(
+    match out.status.code() {
+        Some(0) => Ok(Some(
             String::from_utf8_lossy(&out.stdout)
                 .trim_end()
                 .to_string(),
-        ))
-    } else {
-        Ok(None)
+        )),
+        // --quiet exits 1 (not 128) when the ref simply does not exist.
+        Some(1) => Ok(None),
+        _ => Err(Error::Git {
+            repo: repo.display().to_string(),
+            message: format!("git rev-parse --verify {refname} failed"),
+            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+        }
+        .into()),
     }
 }
 

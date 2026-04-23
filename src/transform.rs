@@ -76,9 +76,6 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     }
 
     // ── orphan target worktree ────────────────────────────────────────────
-    // Prune before adding so a stale entry from a previous crash (directory
-    // already gone) doesn't block re-creation of the same worktree path.
-    git::worktree_prune(&ctx.cache.path)?;
     let tgt_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "tgt");
     let branch = format!("xf-work-{}", &ctx.source_sha);
     git::worktree_add_orphan(&ctx.cache.path, &tgt_wt, &branch)?;
@@ -221,10 +218,10 @@ fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &[String]) -> Result<()> {
     for rel in output {
         let src = src_wt.join(rel);
         let tgt = tgt_wt.join(rel);
-        if std::fs::symlink_metadata(&src).is_err() {
-            continue; // path absent in this commit — produce no output for it
-        }
-        let meta = std::fs::symlink_metadata(&src)?;
+        let meta = match std::fs::symlink_metadata(&src) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            other => other?,
+        };
         if meta.file_type().is_symlink() {
             if let Some(p) = tgt.parent() {
                 std::fs::create_dir_all(p)?;
