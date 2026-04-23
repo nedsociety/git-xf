@@ -57,16 +57,17 @@ async fn sync_one(
         if missing.is_empty() {
             return Ok(());
         }
-        eprintln!("[{name}] would transform {} commit(s):", missing.len());
-        // Print in topological order (oldest first) for readability.
+        // Dry-run output is the primary result of the command → stdout.
+        println!("[{name}] would transform {} commit(s):", missing.len());
         for sha in topo_order(&missing) {
-            eprintln!("  {sha}");
+            println!("  {sha}");
         }
         return Ok(());
     }
 
     // ── parallel dispatch ─────────────────────────────────────────────────
     if !missing.is_empty() {
+        eprintln!("[{name}] transforming {} commit(s)...", missing.len());
         dispatch(
             source_repo.to_path_buf(),
             git_dir.to_path_buf(),
