@@ -56,11 +56,10 @@ async fn sync_one(
     // ── walk the DAG to find commits not yet in the cache ─────────────────
     let (missing, init_mappings) = find_missing(source_repo, &cache, &tips)?;
 
-    if missing.is_empty() {
-        return Ok(());
-    }
-
     if dry_run {
+        if missing.is_empty() {
+            return Ok(());
+        }
         eprintln!("[{name}] would transform {} commit(s):", missing.len());
         // Print in topological order (oldest first) for readability.
         for sha in topo_order(&missing) {
@@ -70,22 +69,25 @@ async fn sync_one(
     }
 
     // ── parallel dispatch ─────────────────────────────────────────────────
-    let all_mappings = dispatch(
-        source_repo.to_path_buf(),
-        git_dir.to_path_buf(),
-        cache.clone(),
-        Arc::new(cfg.clone()),
-        name.to_string(),
-        &missing,
-        init_mappings,
-        jobs,
-    )
-    .await?;
+    if !missing.is_empty() {
+        dispatch(
+            source_repo.to_path_buf(),
+            git_dir.to_path_buf(),
+            cache.clone(),
+            Arc::new(cfg.clone()),
+            name.to_string(),
+            &missing,
+            init_mappings,
+            jobs,
+        )
+        .await?;
+    }
 
-    // ── mirror branches/tags from source whose tip is in the mapping table ─
-    // Scans all refs/heads/* and refs/tags/* in the source; any whose resolved
-    // commit SHA appears in all_mappings gets its counterpart updated in the
-    // cache.  This covers refs that weren't passed as explicit REF arguments.
+    // ── mirror branches/tags from source whose tips are mapped in cache ───
+    // Query the cache directly so pre-existing mappings outside this run's
+    // BFS subgraph are also picked up.  This also runs when missing is empty,
+    // so a newly created branch pointing to an already-mapped commit is
+    // propagated without requiring a fresh commit to be transformed.
     let mut refspecs: Vec<String> = missing
         .keys()
         .map(|sha| {
@@ -96,14 +98,16 @@ async fn sync_one(
     for (refname, src_sha) in
         git::for_each_ref(source_repo, &["refs/heads/", "refs/tags/"])?
     {
-        if let Some(target_sha) = all_mappings.get(&src_sha) {
-            git::update_ref(&cache.path, &refname, target_sha)?;
+        if let Some(target_sha) = cache.mapping(&src_sha)? {
+            git::update_ref(&cache.path, &refname, &target_sha)?;
             refspecs.push(format!("{refname}:{refname}"));
         }
     }
     git::push(&cache.path, &refspecs)?;
 
-    eprintln!("[{name}] synced {} commit(s)", missing.len());
+    if !missing.is_empty() {
+        eprintln!("[{name}] synced {} commit(s)", missing.len());
+    }
     Ok(())
 }
 
