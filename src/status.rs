@@ -47,12 +47,23 @@ pub fn run(
             .collect();
         let target_subjects = git::commit_subjects(&cache.path, &target_shas)?;
 
-        let mapped = mappings.len();
-        let failed = target_subjects
-            .values()
-            .filter(|s| s.starts_with("[git-xf error]"))
-            .count();
+        // Derive counts by walking the same branch commits with the same
+        // lookup logic as the per-row display, so summary and rows agree.
         let total = commits.len();
+        let mut mapped = 0usize;
+        let mut failed = 0usize;
+        for (sha, _) in &commits {
+            if let Some(target_sha) = mappings.get(sha) {
+                if target_subjects
+                    .get(target_sha)
+                    .is_some_and(|s| s.starts_with("[git-xf error]"))
+                {
+                    failed += 1;
+                } else {
+                    mapped += 1;
+                }
+            }
+        }
 
         println!(
             "{name}  →  {}  ({mapped}/{total} mapped, {failed} failed)",
