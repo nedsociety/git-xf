@@ -120,7 +120,9 @@ Steps mirror spec exactly (1–9). Key logic:
 ### Phase 10 — Polish
 - `--dry-run`: thread a `dry_run: bool` flag through sync; skip all writes, print planned actions
 - Structured progress output (eprintln to stderr, results to stdout)
-- Integration test: create a source repo programmatically, run `git-xf` as a subprocess, assert target repo state
+
+### Phase 11 — Integration test
+- Create a source repo programmatically, run `git-xf` as a subprocess, assert target repo state
 
 ---
 
