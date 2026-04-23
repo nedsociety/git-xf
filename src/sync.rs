@@ -24,7 +24,10 @@ pub async fn run(
         refs.to_vec()
     };
 
-    for (name, cfg) in config {
+    let mut names: Vec<&String> = config.keys().collect();
+    names.sort();
+    for name in names {
+        let cfg = &config[name];
         sync_one(source_repo, git_dir, name, cfg, &effective_refs, dry_run, jobs)
             .await
             .with_context(|| format!("transformation '{name}' failed"))?;

@@ -80,7 +80,9 @@ pub async fn run(
         }
     }
 
-    for (name, shas) in per_transform {
+    let mut entries: Vec<_> = per_transform.into_iter().collect();
+    entries.sort_by_key(|(name, _)| *name);
+    for (name, shas) in entries {
         // Build a single-transformation config slice so sync::run's loop
         // only touches this transformation.
         let single: Config = std::iter::once((

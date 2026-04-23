@@ -66,7 +66,16 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
                 }
                 .into());
             }
-            IgnoreErrorPolicy::Skip => return skip_to_parent(ctx),
+            IgnoreErrorPolicy::Skip => {
+                if is_merge {
+                    // Skipping a merge commit would break target graph topology;
+                    // fall back to empty-commit to preserve all parent edges.
+                    let tree = parent_tree_sha(ctx)?;
+                    let msg = error_message(&ctx.name, &ctx.source_sha, &stderr);
+                    return create_and_record(ctx, &tree, &msg, &info);
+                }
+                return skip_to_parent(ctx);
+            }
             IgnoreErrorPolicy::EmptyCommit => {
                 let tree = parent_tree_sha(ctx)?;
                 let msg = error_message(&ctx.name, &ctx.source_sha, &stderr);
@@ -90,7 +99,8 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
         .output();
     let branch = format!("xf-work-{}", &ctx.source_sha);
     git::worktree_add_orphan(&ctx.cache.path, &tgt_wt, &branch)?;
-    let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true);
+    let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true)
+        .with_orphan_branch(branch);
 
     // ── populate target worktree ──────────────────────────────────────────
     copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?;
@@ -203,8 +213,9 @@ fn wt_path(git_dir: &Path, name: &str, sha: &str, kind: &str) -> PathBuf {
         .join(format!("{name}-{kind}-{sha}"))
 }
 
-/// Runs `rule.command` in `wt_path` via `sh -c`. Returns `Err(stderr)` on
-/// non-zero exit.
+/// Runs `rule.command` in `wt_path` via `sh -c`. Returns `Err(combined_output)`
+/// on non-zero exit, combining stdout and stderr so build-tool diagnostics
+/// written to stdout are not silently lost.
 fn run_rule(wt_path: &Path, command: &str) -> std::result::Result<(), String> {
     Command::new("sh")
         .args(["-c", command])
@@ -215,7 +226,14 @@ fn run_rule(wt_path: &Path, command: &str) -> std::result::Result<(), String> {
             if out.status.success() {
                 Ok(())
             } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim_end().to_string())
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let combined = match (stdout.trim_end(), stderr.trim_end()) {
+                    ("", s) => s.to_string(),
+                    (o, "") => o.to_string(),
+                    (o, s) => format!("{o}\n{s}"),
+                };
+                Err(combined)
             }
         })
 }
@@ -230,7 +248,14 @@ fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &[String]) -> Result<()> {
         let src = src_wt.join(rel);
         let tgt = tgt_wt.join(rel);
         let meta = match std::fs::symlink_metadata(&src) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!(
+                    "warning: declared output path '{}' not found in source worktree; \
+                     it will be absent from the target commit",
+                    rel,
+                );
+                continue;
+            }
             other => other?,
         };
         if meta.file_type().is_symlink() {
@@ -294,6 +319,8 @@ struct WorktreeGuard {
     repo: PathBuf,
     path: PathBuf,
     force: bool,
+    /// Orphan branch created alongside this worktree; deleted after removal.
+    orphan_branch: Option<String>,
 }
 
 impl WorktreeGuard {
@@ -302,7 +329,13 @@ impl WorktreeGuard {
             repo: repo.to_path_buf(),
             path: path.to_path_buf(),
             force,
+            orphan_branch: None,
         }
+    }
+
+    fn with_orphan_branch(mut self, branch: String) -> Self {
+        self.orphan_branch = Some(branch);
+        self
     }
 }
 
@@ -314,17 +347,35 @@ impl Drop for WorktreeGuard {
             cmd.arg("--force");
         }
         cmd.arg(&self.path);
-        match cmd.output() {
-            Ok(out) if !out.status.success() => eprintln!(
-                "warning: git worktree remove failed for {}: {}",
-                self.path.display(),
-                String::from_utf8_lossy(&out.stderr).trim_end(),
-            ),
-            Err(e) => eprintln!(
-                "warning: could not run git worktree remove for {}: {e}",
-                self.path.display(),
-            ),
-            Ok(_) => {}
+        let removed = match cmd.output() {
+            Ok(out) if !out.status.success() => {
+                eprintln!(
+                    "warning: git worktree remove failed for {}: {}",
+                    self.path.display(),
+                    String::from_utf8_lossy(&out.stderr).trim_end(),
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: could not run git worktree remove for {}: {e}",
+                    self.path.display(),
+                );
+                false
+            }
+            Ok(_) => true,
+        };
+        // Delete the orphan branch only after the worktree is gone; git refuses
+        // to delete a branch that is currently checked out.
+        if removed {
+            if let Some(branch) = &self.orphan_branch {
+                let refname = format!("refs/heads/{branch}");
+                let _ = Command::new("git")
+                    .arg("-C")
+                    .arg(&self.repo)
+                    .args(["update-ref", "-d", &refname])
+                    .output();
+            }
         }
     }
 }
