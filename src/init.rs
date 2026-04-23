@@ -9,7 +9,7 @@ pub fn run(git_dir: &Path, config: &Config, target_override: Option<&str>) -> Re
     if let Some(target) = target_override {
         if config.len() != 1 {
             bail!(
-                "--target requires exactly one transformation in .git-transform.yaml, \
+                "--target requires exactly one transformation in .git-xf.yaml, \
                  found {}",
                 config.len()
             );

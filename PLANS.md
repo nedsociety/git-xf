@@ -10,7 +10,7 @@ git-xf/
   src/
     main.rs       — tokio entrypoint, CLI dispatch
     cli.rs        — clap derive structs for all subcommands
-    config.rs     — .git-transform.yaml types + validation
+    config.rs     — .git-xf.yaml types + validation
     error.rs      — thiserror error hierarchy
     git.rs        — thin wrappers over std::process::Command git calls
     cache.rs      — bare-clone lifecycle: init, fetch, worktree prune
@@ -58,7 +58,7 @@ git-xf/
 - `TransformConfig` struct matching the YAML schema
 - `Config` = `HashMap<String, TransformConfig>`
 - Validate name regex `[a-zA-Z0-9_-]+` at parse time
-- `Config::load(path)` → reads `.git-transform.yaml` from repo root
+- `Config::load(path)` → reads `.git-xf.yaml` from repo root
 
 ### Phase 3 — Git primitives (`git.rs`)
 One function per git operation; each runs a `Command`, checks exit code, returns stdout or a `GitError`. Key functions:

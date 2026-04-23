@@ -54,11 +54,11 @@ fn validate_name(name: &str) -> bool {
 }
 
 pub fn load(repo_root: &Path) -> Result<Config> {
-    let path = repo_root.join(".git-transform.yaml");
+    let path = repo_root.join(".git-xf.yaml");
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read {}", path.display()))?;
     let config: Config =
-        serde_yaml::from_str(&text).with_context(|| "failed to parse .git-transform.yaml")?;
+        serde_yaml::from_str(&text).with_context(|| "failed to parse .git-xf.yaml")?;
     for name in config.keys() {
         if !validate_name(name) {
             bail!(

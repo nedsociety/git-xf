@@ -1,8 +1,8 @@
-# git-transform (git-xf) — Agent Specification
+# git-xf — Agent Specification
 
 ## What this project is
 
-`git-transform` is a git subcommand (invoked as `git xf`) that transforms one git repository into another by applying a set of user-defined rules to each commit. It preserves the full commit graph structure, including merges, in the target repository.
+`git-xf` is a git subcommand (invoked as `git xf`) that transforms one git repository into another by applying a set of user-defined rules to each commit. It preserves the full commit graph structure, including merges, in the target repository.
 
 Typical use cases:
 - **Artifact repository**: run `make build` on each commit; push the build output as commits to a separate repo.
@@ -24,7 +24,7 @@ git xf hook uninstall
 
 **Default REF:** `HEAD`
 
-Per named transformation in `.git-transform.yaml`:
+Per named transformation in `.git-xf.yaml`:
 
 1. Resolve each REF to a commit SHA.
 2. Check whether `refs/git-xf/<name>/<sha>` exists in the local cache. If missing, recurse into parent commits until the entire missing subgraph is identified.
@@ -45,14 +45,14 @@ Installs or removes a `pre-push` hook in `.git/hooks/`.
 
 ---
 
-## Configuration file: `.git-transform.yaml`
+## Configuration file: `.git-xf.yaml`
 
 Lives in the root of the **source** repository. The root is a map of named transformations.
 
 Transformation names must match `[a-zA-Z0-9_-]+` — the name is used as both a ref path component (`refs/git-xf/<name>/...`) and a filesystem directory name (`.git/git-xf/<name>.git`). Validated at parse time.
 
 ```yaml
-# .git-transform.yaml
+# .git-xf.yaml
 
 protocol-codegen:
   target: https://github.com/my-org/protocol-codegen.git  # path or URL

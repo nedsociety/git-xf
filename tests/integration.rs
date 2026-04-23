@@ -19,7 +19,7 @@ struct Env {
 impl Env {
     /// Create a fresh test environment.
     ///
-    /// `config_yaml` is written to `<source>/.git-transform.yaml`.  Use
+    /// `config_yaml` is written to `<source>/.git-xf.yaml`.  Use
     /// `"../target.git"` as the target path — the source and target repos are
     /// siblings inside the same temp directory.
     fn new(config_yaml: &str) -> Self {
@@ -35,7 +35,7 @@ impl Env {
         git(&source, &["config", "user.email", "tester@example.com"]);
         git(&source, &["config", "commit.gpgsign", "false"]);
 
-        fs::write(source.join(".git-transform.yaml"), config_yaml).unwrap();
+        fs::write(source.join(".git-xf.yaml"), config_yaml).unwrap();
 
         Self { _tmp: tmp, source, target }
     }
