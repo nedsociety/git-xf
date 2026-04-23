@@ -312,6 +312,26 @@ pub fn fetch(repo: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Returns the abbreviated ref name for `refname` (e.g. `"main"` for
+/// `"refs/heads/main"`, or the branch name when `refname` is `"HEAD"`).
+/// Returns `None` when `refname` resolves to a detached HEAD or a bare SHA.
+pub fn rev_parse_abbrev_ref(repo: &Path, refname: &str) -> Result<Option<String>> {
+    let result = run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", "--abbrev-ref", refname]),
+        repo,
+    )?;
+    if result == "HEAD"
+        || (result.len() >= 7 && result.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        Ok(None)
+    } else {
+        Ok(Some(result))
+    }
+}
+
 pub fn repo_root() -> Result<String> {
     let cwd = Path::new(".");
     let out = Command::new("git")
