@@ -50,7 +50,8 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     let src_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "src");
     std::fs::create_dir_all(&src_wt)?;
     git::worktree_add(&ctx.source_repo, &src_wt, &ctx.source_sha)?;
-    let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, false);
+    // force=true because rule.command leaves modified/untracked files behind
+    let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
 
     // ── run rule command ──────────────────────────────────────────────────
     match run_rule(&src_wt, &ctx.config.rule.command) {
@@ -182,11 +183,10 @@ fn truncate(s: &str, max_chars: usize) -> &str {
 }
 
 fn wt_path(git_dir: &Path, name: &str, sha: &str, kind: &str) -> PathBuf {
-    let prefix = sha.get(..8).unwrap_or(sha);
     git_dir
         .join("git-xf")
         .join("tmp")
-        .join(format!("{name}-{kind}-{prefix}"))
+        .join(format!("{name}-{kind}-{sha}"))
 }
 
 /// Runs `rule.command` in `wt_path` via `sh -c`. Returns `Err(stderr)` on
