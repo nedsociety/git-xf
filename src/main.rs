@@ -30,8 +30,9 @@ async fn main() -> Result<()> {
             sync::run(&source_repo, &git_dir, &config, &refs, dry_run, jobs).await?;
         }
         Commands::Init { target } => {
-            let _ = target;
-            todo!("init")
+            let (source_repo, git_dir) = locate_repo()?;
+            let config = config::load(&source_repo)?;
+            init::run(&git_dir, &config, target.as_deref())?;
         }
         Commands::Status { branch } => {
             let (source_repo, git_dir) = locate_repo()?;
@@ -39,8 +40,20 @@ async fn main() -> Result<()> {
             status::run(&source_repo, &git_dir, &config, branch.as_deref())?;
         }
         Commands::Hook { command } => match command {
-            HookCommands::Install => todo!("hook install"),
-            HookCommands::Uninstall => todo!("hook uninstall"),
+            HookCommands::Install => {
+                let (_, git_dir) = locate_repo()?;
+                hook::install(&git_dir)?;
+            }
+            HookCommands::Uninstall => {
+                let (_, git_dir) = locate_repo()?;
+                hook::uninstall(&git_dir)?;
+            }
+            HookCommands::Run => {
+                let (source_repo, git_dir) = locate_repo()?;
+                let config = config::load(&source_repo)?;
+                let jobs = default_jobs();
+                hook::run(&source_repo, &git_dir, &config, jobs).await?;
+            }
         },
     }
     Ok(())

@@ -54,4 +54,7 @@ pub enum HookCommands {
     Install,
     /// Uninstall the pre-push hook
     Uninstall,
+    /// Called by the installed pre-push hook (not for direct use)
+    #[command(hide = true)]
+    Run,
 }
