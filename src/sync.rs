@@ -36,8 +36,6 @@ pub async fn run(
 
 struct Tip {
     sha: String,
-    branch: Option<String>,
-    tag: Option<String>,
 }
 
 async fn sync_one(
@@ -84,20 +82,10 @@ async fn sync_one(
     )
     .await?;
 
-    // ── update branch/tag tips in local cache ─────────────────────────────
-    for tip in &tips {
-        let target_sha = all_mappings
-            .get(&tip.sha)
-            .with_context(|| format!("no mapping found for tip {}", tip.sha))?;
-        if let Some(branch) = &tip.branch {
-            git::update_ref(&cache.path, &format!("refs/heads/{branch}"), target_sha)?;
-        }
-        if let Some(tag) = &tip.tag {
-            git::update_ref(&cache.path, &format!("refs/tags/{tag}"), target_sha)?;
-        }
-    }
-
-    // ── single push ───────────────────────────────────────────────────────
+    // ── mirror branches/tags from source whose tip is in the mapping table ─
+    // Scans all refs/heads/* and refs/tags/* in the source; any whose resolved
+    // commit SHA appears in all_mappings gets its counterpart updated in the
+    // cache.  This covers refs that weren't passed as explicit REF arguments.
     let mut refspecs: Vec<String> = missing
         .keys()
         .map(|sha| {
@@ -105,12 +93,12 @@ async fn sync_one(
             format!("{r}:{r}")
         })
         .collect();
-    for tip in &tips {
-        if let Some(branch) = &tip.branch {
-            refspecs.push(format!("refs/heads/{branch}:refs/heads/{branch}"));
-        }
-        if let Some(tag) = &tip.tag {
-            refspecs.push(format!("refs/tags/{tag}:refs/tags/{tag}"));
+    for (refname, src_sha) in
+        git::for_each_ref(source_repo, &["refs/heads/", "refs/tags/"])?
+    {
+        if let Some(target_sha) = all_mappings.get(&src_sha) {
+            git::update_ref(&cache.path, &refname, target_sha)?;
+            refspecs.push(format!("{refname}:{refname}"));
         }
     }
     git::push(&cache.path, &refspecs)?;
@@ -125,18 +113,7 @@ fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<Tip>> {
     refs.iter()
         .map(|r| {
             let sha = git::resolve_ref(source_repo, r)?;
-            let full = git::symbolic_full_name(source_repo, r)?;
-            let (branch, tag) = match full.as_deref() {
-                Some("HEAD") => (git::symbolic_ref_short(source_repo)?, None),
-                Some(s) if s.starts_with("refs/heads/") => {
-                    (Some(s["refs/heads/".len()..].to_string()), None)
-                }
-                Some(s) if s.starts_with("refs/tags/") => {
-                    (None, Some(s["refs/tags/".len()..].to_string()))
-                }
-                _ => (None, None),
-            };
-            Ok(Tip { sha, branch, tag })
+            Ok(Tip { sha })
         })
         .collect()
 }

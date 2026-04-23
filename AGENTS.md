@@ -122,14 +122,14 @@ Stored in the **target** repository (and mirrored in the local cache). The targe
 
 ## Branch and tag mirroring
 
-After transforming a batch of commits, `git xf sync` mirrors branch and tag refs from the source to the target:
+After a sync run, `git xf sync` scans **all** `refs/heads/*` and `refs/tags/*` in the source repository and mirrors any whose tip commit appears in the mapping table (newly transformed or previously cached) to the target:
 
-- **Branch**: if a REF resolves to `refs/heads/<branch>`, the target repo's `refs/heads/<branch>` is updated to point to the transformed tip commit.
-- **Tag**: if a REF resolves to `refs/tags/<tag>`, the target repo's `refs/tags/<tag>` is updated to point to the transformed tip commit as a **lightweight tag** (annotated tag objects are not re-created).
-- **HEAD** (default REF): resolved to its current branch via `git symbolic-ref --short HEAD`; treated as a branch update. If HEAD is detached, no branch or tag ref is updated.
-- **Bare SHAs or revision expressions** (e.g. `abc1234`, `HEAD~3`): no branch or tag ref is updated; only the mapping refs are written.
+- **Branches**: every `refs/heads/<branch>` in the source whose tip commit has a mapping causes `refs/heads/<branch>` in the target to be updated.
+- **Tags**: every `refs/tags/<tag>` in the source whose resolved commit has a mapping causes `refs/tags/<tag>` in the target to be updated as a **lightweight tag**. Annotated tags are dereferenced to their tagged commit for the mapping lookup; the tag object itself is not re-created.
 
-Both branch and tag refspecs are included in the single `git push` at the end of each sync run.
+This scan is driven by the mapping table, not the explicit REF arguments. REF arguments only control which commit subgraph is traversed; once commits are mapped (now or from a prior run), any source branch or tag pointing to them is automatically mirrored.
+
+All updated branch and tag refspecs are included in the single `git push` at the end of each sync run.
 
 ---
 

@@ -312,50 +312,31 @@ pub fn fetch(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns the full symbolic ref name for `refname`
-/// (e.g. `"refs/heads/main"`, `"refs/tags/v1"`, or `"HEAD"`).
-/// Returns `None` when `refname` is a bare SHA or any non-symbolic revision expression.
-pub fn symbolic_full_name(repo: &Path, refname: &str) -> Result<Option<String>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--symbolic-full-name", refname])
-        .output()
-        .map_err(|e| Error::Git {
-            repo: repo.display().to_string(),
-            message: e.to_string(),
-            stderr: String::new(),
-        })?;
-    if !out.status.success() {
-        return Ok(None);
+/// Returns `(full_refname, commit_sha)` for all refs under `prefixes`.
+/// Annotated tags are resolved to their tagged commit via `%(*objectname)`.
+pub fn for_each_ref(repo: &Path, prefixes: &[&str]) -> Result<Vec<(String, String)>> {
+    let fmt = "%(refname)\t%(*objectname)\t%(objectname)";
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(["for-each-ref", &format!("--format={fmt}")]);
+    for p in prefixes {
+        cmd.arg(p);
     }
-    let result = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
-    if result.starts_with("refs/") || result == "HEAD" {
-        Ok(Some(result))
-    } else {
-        Ok(None)
+    let out = run(&mut cmd, repo)?;
+    let mut result = Vec::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let refname = parts.next().unwrap_or("");
+        let deref_sha = parts.next().unwrap_or("");
+        let obj_sha = parts.next().unwrap_or("");
+        if refname.is_empty() {
+            continue;
+        }
+        let sha = if deref_sha.is_empty() { obj_sha } else { deref_sha };
+        if !sha.is_empty() {
+            result.push((refname.to_string(), sha.to_string()));
+        }
     }
-}
-
-/// Returns the short branch name that HEAD points to, or `None` for detached HEAD.
-pub fn symbolic_ref_short(repo: &Path) -> Result<Option<String>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["symbolic-ref", "--short", "HEAD"])
-        .output()
-        .map_err(|e| Error::Git {
-            repo: repo.display().to_string(),
-            message: e.to_string(),
-            stderr: String::new(),
-        })?;
-    if out.status.success() {
-        Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
-        ))
-    } else {
-        Ok(None)
-    }
+    Ok(result)
 }
 
 pub fn repo_root() -> Result<String> {
