@@ -223,12 +223,15 @@ struct DispatchCtx {
 
 /// Transforms all commits in `missing` in parallel (bounded by `jobs`),
 /// respecting topological order.
-async fn dispatch(
-    ctx: DispatchCtx,
-    missing: &MissingMap,
-    init_mappings: KnownMap,
-) -> Result<()> {
-    let DispatchCtx { source_repo, git_dir, cache, config, name, jobs } = ctx;
+async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMap) -> Result<()> {
+    let DispatchCtx {
+        source_repo,
+        git_dir,
+        cache,
+        config,
+        name,
+        jobs,
+    } = ctx;
     let mut in_degree: HashMap<String, usize> =
         missing.keys().map(|k| (k.clone(), 0usize)).collect();
     let mut children: HashMap<String, Vec<String>> = HashMap::new();

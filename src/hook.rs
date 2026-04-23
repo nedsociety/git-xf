@@ -45,12 +45,7 @@ pub fn uninstall(git_dir: &Path) -> Result<()> {
 /// Invoked by the installed pre-push hook script.  Reads git's push
 /// description from stdin and syncs any transformation whose `branches`
 /// whitelist contains a pushed branch.
-pub async fn run(
-    source_repo: &Path,
-    git_dir: &Path,
-    config: &Config,
-    jobs: usize,
-) -> Result<()> {
+pub async fn run(source_repo: &Path, git_dir: &Path, config: &Config, jobs: usize) -> Result<()> {
     // stdin lines: "<local-ref> <local-sha> <remote-ref> <remote-sha>"
     let stdin = io::stdin();
     let mut per_transform: HashMap<&str, Vec<String>> = HashMap::new();
@@ -85,11 +80,8 @@ pub async fn run(
     for (name, shas) in entries {
         // Build a single-transformation config slice so sync::run's loop
         // only touches this transformation.
-        let single: Config = std::iter::once((
-            name.to_string(),
-            config.get(name).unwrap().clone(),
-        ))
-        .collect();
+        let single: Config =
+            std::iter::once((name.to_string(), config.get(name).unwrap().clone())).collect();
         sync::run(source_repo, git_dir, &single, &shas, false, jobs).await?;
     }
 

@@ -48,10 +48,12 @@ pub fn resolve_ref(repo: &Path, refname: &str) -> Result<String> {
 pub fn commit_info(repo: &Path, sha: &str) -> Result<CommitInfo> {
     let fmt = "%P%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%B";
     let raw = run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["show", "-s", &format!("--pretty=tformat:{fmt}"), sha]),
+        Command::new("git").arg("-C").arg(repo).args([
+            "show",
+            "-s",
+            &format!("--pretty=tformat:{fmt}"),
+            sha,
+        ]),
         repo,
     )?;
 
@@ -176,7 +178,10 @@ pub fn push(repo: &Path, refspecs: &[String]) -> Result<()> {
 
 pub fn git_add_all(wt_path: &Path) -> Result<()> {
     run(
-        Command::new("git").arg("-C").arg(wt_path).args(["add", "."]),
+        Command::new("git")
+            .arg("-C")
+            .arg(wt_path)
+            .args(["add", "."]),
         wt_path,
     )?;
     Ok(())
@@ -259,7 +264,9 @@ pub fn fetch(repo: &Path) -> Result<()> {
 pub fn for_each_ref(repo: &Path, prefixes: &[&str]) -> Result<Vec<(String, String)>> {
     let fmt = "%(refname)\t%(*objectname)\t%(objectname)";
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(["for-each-ref", &format!("--format={fmt}")]);
+    cmd.arg("-C")
+        .arg(repo)
+        .args(["for-each-ref", &format!("--format={fmt}")]);
     for p in prefixes {
         cmd.arg(p);
     }
@@ -273,7 +280,11 @@ pub fn for_each_ref(repo: &Path, prefixes: &[&str]) -> Result<Vec<(String, Strin
         if refname.is_empty() {
             continue;
         }
-        let sha = if deref_sha.is_empty() { obj_sha } else { deref_sha };
+        let sha = if deref_sha.is_empty() {
+            obj_sha
+        } else {
+            deref_sha
+        };
         if !sha.is_empty() {
             result.push((refname.to_string(), sha.to_string()));
         }
@@ -398,4 +409,3 @@ pub fn git_common_dir() -> Result<String> {
         .into())
     }
 }
-

@@ -37,7 +37,11 @@ impl Env {
 
         fs::write(source.join(".git-xf.yaml"), config_yaml).unwrap();
 
-        Self { _tmp: tmp, source, target }
+        Self {
+            _tmp: tmp,
+            source,
+            target,
+        }
     }
 
     /// Stage and commit files; return the new HEAD SHA.
@@ -184,7 +188,11 @@ impl Env {
             .output()
             .unwrap();
         let parents = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
-        if parents.is_empty() { 0 } else { parents.split_whitespace().count() }
+        if parents.is_empty() {
+            0
+        } else {
+            parents.split_whitespace().count()
+        }
     }
 
     fn target_tree_files(&self, sha: &str) -> Vec<String> {
@@ -280,13 +288,22 @@ fn test_sync_linear() {
 
     // Tip mapping ref pushed to target.
     let mapping_ref = format!("refs/git-xf/test/{sha3}");
-    assert!(env.target_ref_exists(&mapping_ref), "mapping ref missing: {mapping_ref}");
+    assert!(
+        env.target_ref_exists(&mapping_ref),
+        "mapping ref missing: {mapping_ref}"
+    );
 
     // Target tip commit contains the expected trailers.
     let tip_sha = env.target_ref_sha("refs/heads/main").unwrap();
     let msg = env.target_commit_message(&tip_sha);
-    assert!(msg.contains("git-xf-source:"), "missing git-xf-source trailer: {msg}");
-    assert!(msg.contains("git-xf-transform: test"), "missing git-xf-transform trailer: {msg}");
+    assert!(
+        msg.contains("git-xf-source:"),
+        "missing git-xf-source trailer: {msg}"
+    );
+    assert!(
+        msg.contains("git-xf-transform: test"),
+        "missing git-xf-transform trailer: {msg}"
+    );
     assert!(msg.contains("third"), "source message not preserved: {msg}");
 }
 
@@ -330,12 +347,18 @@ fn test_sync_dry_run() {
     assert!(stdout.contains(&sha2), "stdout missing sha2:\n{stdout}");
 
     // Target has no refs (nothing was pushed).
-    assert!(!env.target_ref_exists("refs/heads/main"), "target main should not exist after dry-run");
+    assert!(
+        !env.target_ref_exists("refs/heads/main"),
+        "target main should not exist after dry-run"
+    );
 
     // Running a second dry-run after a real sync should produce no output.
     env.sync(&[]);
     let (stdout2, _) = env.sync_output(&["--dry-run"]);
-    assert!(stdout2.is_empty(), "dry-run after full sync should produce no output:\n{stdout2}");
+    assert!(
+        stdout2.is_empty(),
+        "dry-run after full sync should produce no output:\n{stdout2}"
+    );
 }
 
 /// All source branches are mirrored to the target after sync.
@@ -356,8 +379,14 @@ fn test_sync_branch_mirror() {
 
     env.sync(&[]);
 
-    assert!(env.target_ref_exists("refs/heads/main"), "main missing from target");
-    assert!(env.target_ref_exists("refs/heads/feature"), "feature missing from target");
+    assert!(
+        env.target_ref_exists("refs/heads/main"),
+        "main missing from target"
+    );
+    assert!(
+        env.target_ref_exists("refs/heads/feature"),
+        "feature missing from target"
+    );
 
     // feature points to "shared base" (1 commit), main points to "main only" (2 commits).
     let main_tip = env.target_ref_sha("refs/heads/main").unwrap();
@@ -375,12 +404,18 @@ fn test_sync_tag_mirror() {
 
     env.sync(&[]);
 
-    assert!(env.target_ref_exists("refs/tags/v1.0"), "tag v1.0 missing from target");
+    assert!(
+        env.target_ref_exists("refs/tags/v1.0"),
+        "tag v1.0 missing from target"
+    );
 
     // The tag tip should differ from the main tip (it points to the first commit).
     let tag_sha = env.target_ref_sha("refs/tags/v1.0").unwrap();
     let main_sha = env.target_ref_sha("refs/heads/main").unwrap();
-    assert_ne!(tag_sha, main_sha, "v1.0 tag should point to first commit, not tip");
+    assert_ne!(
+        tag_sha, main_sha,
+        "v1.0 tag should point to first commit, not tip"
+    );
 }
 
 /// A merge commit in the source produces a merge commit (two parents) in the target.
@@ -400,11 +435,13 @@ fn test_sync_merge_commit() {
 
     // Find the target SHA for the merge commit.
     let mapping_ref = format!("refs/git-xf/test/{merge_sha}");
-    let target_merge_sha = env.target_ref_sha(&mapping_ref)
+    let target_merge_sha = env
+        .target_ref_sha(&mapping_ref)
         .unwrap_or_else(|| panic!("merge mapping ref missing: {mapping_ref}"));
 
     assert_eq!(
-        env.target_parent_count(&target_merge_sha), 2,
+        env.target_parent_count(&target_merge_sha),
+        2,
         "target merge commit should have 2 parents"
     );
 }
@@ -424,16 +461,25 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  skip-commit-me
     env.sync(&[]);
 
     // The skipped commit maps to the same target as its parent.
-    let base_target = env.target_ref_sha(&format!("refs/git-xf/test/{sha_base}")).unwrap();
-    let skip_target = env.target_ref_sha(&format!("refs/git-xf/test/{sha_skip}")).unwrap();
+    let base_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_base}"))
+        .unwrap();
+    let skip_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_skip}"))
+        .unwrap();
     assert_eq!(
         base_target, skip_target,
         "skipped commit should map to parent's target SHA"
     );
 
     // The commit after the skip has a non-skip mapping.
-    let after_target = env.target_ref_sha(&format!("refs/git-xf/test/{sha_after}")).unwrap();
-    assert_ne!(after_target, skip_target, "commit after skip should have its own target SHA");
+    let after_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_after}"))
+        .unwrap();
+    assert_ne!(
+        after_target, skip_target,
+        "commit after skip should have its own target SHA"
+    );
 
     // Target has 2 real commits (base + after), not 3.
     assert_eq!(env.target_commit_count("refs/heads/main"), 2);
@@ -454,8 +500,12 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  changeless: sk
 
     env.sync(&[]);
 
-    let target1 = env.target_ref_sha(&format!("refs/git-xf/test/{sha1}")).unwrap();
-    let target2 = env.target_ref_sha(&format!("refs/git-xf/test/{sha2}")).unwrap();
+    let target1 = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha1}"))
+        .unwrap();
+    let target2 = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha2}"))
+        .unwrap();
     assert_eq!(
         target1, target2,
         "changeless:skip commit should map to parent's target SHA"
@@ -490,7 +540,9 @@ test:\n  target: ../target.git\n  rule:\n    command: \"exit 1\"\n  ignore-error
     let sha = env.commit("will fail", &[("a.txt", "content")]);
     env.sync(&[]);
 
-    let target_sha = env.target_ref_sha(&format!("refs/git-xf/test/{sha}")).unwrap();
+    let target_sha = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha}"))
+        .unwrap();
     let msg = env.target_commit_message(&target_sha);
     assert!(
         msg.contains("[git-xf error]"),
@@ -519,8 +571,12 @@ test:\n  target: ../target.git\n  rule:\n    command: \"[ ! -f fail-me.txt ]\"\n
 
     env.sync(&[]);
 
-    let base_target = env.target_ref_sha(&format!("refs/git-xf/test/{sha_base}")).unwrap();
-    let fail_target = env.target_ref_sha(&format!("refs/git-xf/test/{sha_fail}")).unwrap();
+    let base_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_base}"))
+        .unwrap();
+    let fail_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_fail}"))
+        .unwrap();
 
     assert_eq!(
         base_target, fail_target,
@@ -541,8 +597,14 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n    output:\n   
 
     let tip = env.target_ref_sha("refs/heads/main").unwrap();
     let files = env.target_tree_files(&tip);
-    assert!(files.contains(&"keep.txt".to_string()), "keep.txt missing: {files:?}");
-    assert!(!files.contains(&"skip.txt".to_string()), "skip.txt should not be in target: {files:?}");
+    assert!(
+        files.contains(&"keep.txt".to_string()),
+        "keep.txt missing: {files:?}"
+    );
+    assert!(
+        !files.contains(&"skip.txt".to_string()),
+        "skip.txt should not be in target: {files:?}"
+    );
     assert_eq!(env.target_file_content(&tip, "keep.txt"), "keep");
 }
 
@@ -564,7 +626,11 @@ fn test_init() {
     );
 
     let cache = env.source.join(".git/git-xf/test.git");
-    assert!(cache.exists(), "cache directory not created: {}", cache.display());
+    assert!(
+        cache.exists(),
+        "cache directory not created: {}",
+        cache.display()
+    );
 
     // The cache must be a valid bare git repo.
     let out = Command::new("git")
@@ -587,9 +653,18 @@ fn test_status_all_pending() {
 
     let out = env.run_status(&[]);
 
-    assert!(out.contains("Pending"), "expected Pending in status output:\n{out}");
-    assert!(!out.contains("Mapped"), "unexpected Mapped in status output:\n{out}");
-    assert!(out.contains("(0/2 mapped, 0 failed)"), "unexpected counts:\n{out}");
+    assert!(
+        out.contains("Pending"),
+        "expected Pending in status output:\n{out}"
+    );
+    assert!(
+        !out.contains("Mapped"),
+        "unexpected Mapped in status output:\n{out}"
+    );
+    assert!(
+        out.contains("(0/2 mapped, 0 failed)"),
+        "unexpected counts:\n{out}"
+    );
 }
 
 /// After a full sync, every commit on the branch shows as Mapped.
@@ -602,9 +677,18 @@ fn test_status_all_mapped() {
 
     let out = env.run_status(&[]);
 
-    assert!(out.contains("Mapped"), "expected Mapped in status output:\n{out}");
-    assert!(!out.contains("Pending"), "unexpected Pending in status output:\n{out}");
-    assert!(out.contains("(2/2 mapped, 0 failed)"), "unexpected counts:\n{out}");
+    assert!(
+        out.contains("Mapped"),
+        "expected Mapped in status output:\n{out}"
+    );
+    assert!(
+        !out.contains("Pending"),
+        "unexpected Pending in status output:\n{out}"
+    );
+    assert!(
+        out.contains("(2/2 mapped, 0 failed)"),
+        "unexpected counts:\n{out}"
+    );
 }
 
 /// After a partial sync (only the earliest commit), later commits are Pending.
@@ -622,7 +706,10 @@ fn test_status_mixed() {
 
     assert!(out.contains("Mapped"), "expected Mapped:\n{out}");
     assert!(out.contains("Pending"), "expected Pending:\n{out}");
-    assert!(out.contains("(1/3 mapped, 0 failed)"), "unexpected counts:\n{out}");
+    assert!(
+        out.contains("(1/3 mapped, 0 failed)"),
+        "unexpected counts:\n{out}"
+    );
     // Subjects should appear in the output.
     assert!(out.contains("first"), "subject 'first' missing:\n{out}");
     assert!(out.contains("third"), "subject 'third' missing:\n{out}");
@@ -639,9 +726,18 @@ test:\n  target: ../target.git\n  rule:\n    command: \"exit 1\"\n  ignore-error
 
     let out = env.run_status(&[]);
 
-    assert!(out.contains("Failed"), "expected Failed in status output:\n{out}");
-    assert!(!out.contains("Mapped"), "unexpected Mapped in status output:\n{out}");
-    assert!(out.contains("(0/1 mapped, 1 failed)"), "unexpected counts:\n{out}");
+    assert!(
+        out.contains("Failed"),
+        "expected Failed in status output:\n{out}"
+    );
+    assert!(
+        !out.contains("Mapped"),
+        "unexpected Mapped in status output:\n{out}"
+    );
+    assert!(
+        out.contains("(0/1 mapped, 1 failed)"),
+        "unexpected counts:\n{out}"
+    );
 }
 
 // ── git xf hook tests ─────────────────────────────────────────────────────────
@@ -651,20 +747,34 @@ test:\n  target: ../target.git\n  rule:\n    command: \"exit 1\"\n  ignore-error
 fn test_hook_install() {
     let env = Env::new(passthrough_config());
     let out = env.run_hook_cmd("install");
-    assert!(out.status.success(), "hook install failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "hook install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let hook = env.hook_path();
     assert!(hook.exists(), "pre-push hook file not created");
 
     let content = fs::read_to_string(&hook).unwrap();
-    assert!(content.contains("# Installed by git-xf."), "MARKER missing from hook:\n{content}");
-    assert!(content.contains("git xf hook run"), "hook body missing 'git xf hook run':\n{content}");
+    assert!(
+        content.contains("# Installed by git-xf."),
+        "MARKER missing from hook:\n{content}"
+    );
+    assert!(
+        content.contains("git xf hook run"),
+        "hook body missing 'git xf hook run':\n{content}"
+    );
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(&hook).unwrap().permissions().mode();
-        assert!(mode & 0o111 != 0, "hook is not executable (mode {:o})", mode);
+        assert!(
+            mode & 0o111 != 0,
+            "hook is not executable (mode {:o})",
+            mode
+        );
     }
 }
 
@@ -676,8 +786,15 @@ fn test_hook_uninstall() {
     assert!(env.hook_path().exists(), "install did not create hook");
 
     let out = env.run_hook_cmd("uninstall");
-    assert!(out.status.success(), "hook uninstall failed: {}", String::from_utf8_lossy(&out.stderr));
-    assert!(!env.hook_path().exists(), "hook file still present after uninstall");
+    assert!(
+        out.status.success(),
+        "hook uninstall failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !env.hook_path().exists(),
+        "hook file still present after uninstall"
+    );
 }
 
 /// `hook uninstall` does not remove a hook that was not installed by git-xf.
@@ -691,7 +808,10 @@ fn test_hook_uninstall_preserves_foreign_hook() {
 
     let out = env.run_hook_cmd("uninstall");
     assert!(out.status.success(), "hook uninstall failed unexpectedly");
-    assert!(hook.exists(), "foreign hook was removed — should have been left alone");
+    assert!(
+        hook.exists(),
+        "foreign hook was removed — should have been left alone"
+    );
 }
 
 /// `hook run` reads push descriptions from stdin and triggers sync for branches
@@ -715,7 +835,12 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  branches:\n   
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin_line.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin_line.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
 
     assert!(
@@ -726,7 +851,10 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  branches:\n   
     );
 
     // Sync should have run and pushed the commit.
-    assert!(env.target_ref_exists("refs/heads/main"), "main not pushed after hook run");
+    assert!(
+        env.target_ref_exists("refs/heads/main"),
+        "main not pushed after hook run"
+    );
     assert_eq!(env.target_commit_count("refs/heads/main"), 1);
 }
 
@@ -749,10 +877,18 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  branches:\n   
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin_line.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin_line.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
 
     assert!(out.status.success(), "hook run failed unexpectedly");
     // Branch is not in whitelist — no sync should have run.
-    assert!(!env.target_ref_exists("refs/heads/main"), "main should not be pushed");
+    assert!(
+        !env.target_ref_exists("refs/heads/main"),
+        "main should not be pushed"
+    );
 }

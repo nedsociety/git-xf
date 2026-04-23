@@ -95,8 +95,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
         .output();
     let branch = format!("xf-work-{}", &ctx.source_sha);
     git::worktree_add_orphan(&ctx.cache.path, &tgt_wt, &branch)?;
-    let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true)
-        .with_orphan_branch(branch);
+    let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true).with_orphan_branch(branch);
 
     copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?;
     git::git_add_all(&tgt_wt)?;
@@ -121,12 +120,12 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
 
 /// Records source→parent mapping and returns the parent target SHA.
 fn skip_to_parent(ctx: &TransformCtx) -> Result<String> {
-    let sha = ctx
-        .target_parents
-        .first()
-        .cloned()
-        .ok_or_else(|| anyhow!("commit {} has no parent but a skip policy was applied",
-            ctx.source_sha))?;
+    let sha = ctx.target_parents.first().cloned().ok_or_else(|| {
+        anyhow!(
+            "commit {} has no parent but a skip policy was applied",
+            ctx.source_sha
+        )
+    })?;
     ctx.cache.set_mapping(&ctx.source_sha, &sha)?;
     Ok(sha)
 }
