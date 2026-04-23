@@ -120,6 +120,19 @@ Stored in the **target** repository (and mirrored in the local cache). The targe
 
 ---
 
+## Branch and tag mirroring
+
+After transforming a batch of commits, `git xf sync` mirrors branch and tag refs from the source to the target:
+
+- **Branch**: if a REF resolves to `refs/heads/<branch>`, the target repo's `refs/heads/<branch>` is updated to point to the transformed tip commit.
+- **Tag**: if a REF resolves to `refs/tags/<tag>`, the target repo's `refs/tags/<tag>` is updated to point to the transformed tip commit as a **lightweight tag** (annotated tag objects are not re-created).
+- **HEAD** (default REF): resolved to its current branch via `git symbolic-ref --short HEAD`; treated as a branch update. If HEAD is detached, no branch or tag ref is updated.
+- **Bare SHAs or revision expressions** (e.g. `abc1234`, `HEAD~3`): no branch or tag ref is updated; only the mapping refs are written.
+
+Both branch and tag refspecs are included in the single `git push` at the end of each sync run.
+
+---
+
 ## Target repository local cache
 
 A bare clone per named transformation at `.git/git-xf/<name>.git`.

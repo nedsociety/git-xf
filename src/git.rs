@@ -312,23 +312,49 @@ pub fn fetch(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns the abbreviated ref name for `refname` (e.g. `"main"` for
-/// `"refs/heads/main"`, or the branch name when `refname` is `"HEAD"`).
-/// Returns `None` when `refname` resolves to a detached HEAD or a bare SHA.
-pub fn rev_parse_abbrev_ref(repo: &Path, refname: &str) -> Result<Option<String>> {
-    let result = run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["rev-parse", "--abbrev-ref", refname]),
-        repo,
-    )?;
-    if result == "HEAD"
-        || (result.len() >= 7 && result.chars().all(|c| c.is_ascii_hexdigit()))
-    {
-        Ok(None)
-    } else {
+/// Returns the full symbolic ref name for `refname`
+/// (e.g. `"refs/heads/main"`, `"refs/tags/v1"`, or `"HEAD"`).
+/// Returns `None` when `refname` is a bare SHA or any non-symbolic revision expression.
+pub fn symbolic_full_name(repo: &Path, refname: &str) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--symbolic-full-name", refname])
+        .output()
+        .map_err(|e| Error::Git {
+            repo: repo.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let result = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+    if result.starts_with("refs/") || result == "HEAD" {
         Ok(Some(result))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Returns the short branch name that HEAD points to, or `None` for detached HEAD.
+pub fn symbolic_ref_short(repo: &Path) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .output()
+        .map_err(|e| Error::Git {
+            repo: repo.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
+    if out.status.success() {
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
+        ))
+    } else {
+        Ok(None)
     }
 }
 

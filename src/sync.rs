@@ -37,6 +37,7 @@ pub async fn run(
 struct Tip {
     sha: String,
     branch: Option<String>,
+    tag: Option<String>,
 }
 
 async fn sync_one(
@@ -83,13 +84,16 @@ async fn sync_one(
     )
     .await?;
 
-    // ── update branch tips in local cache ─────────────────────────────────
+    // ── update branch/tag tips in local cache ─────────────────────────────
     for tip in &tips {
+        let target_sha = all_mappings
+            .get(&tip.sha)
+            .with_context(|| format!("no mapping found for tip {}", tip.sha))?;
         if let Some(branch) = &tip.branch {
-            let target_sha = all_mappings
-                .get(&tip.sha)
-                .with_context(|| format!("no mapping found for tip {}", tip.sha))?;
             git::update_ref(&cache.path, &format!("refs/heads/{branch}"), target_sha)?;
+        }
+        if let Some(tag) = &tip.tag {
+            git::update_ref(&cache.path, &format!("refs/tags/{tag}"), target_sha)?;
         }
     }
 
@@ -105,6 +109,9 @@ async fn sync_one(
         if let Some(branch) = &tip.branch {
             refspecs.push(format!("refs/heads/{branch}:refs/heads/{branch}"));
         }
+        if let Some(tag) = &tip.tag {
+            refspecs.push(format!("refs/tags/{tag}:refs/tags/{tag}"));
+        }
     }
     git::push(&cache.path, &refspecs)?;
 
@@ -118,8 +125,18 @@ fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<Tip>> {
     refs.iter()
         .map(|r| {
             let sha = git::resolve_ref(source_repo, r)?;
-            let branch = git::rev_parse_abbrev_ref(source_repo, r)?;
-            Ok(Tip { sha, branch })
+            let full = git::symbolic_full_name(source_repo, r)?;
+            let (branch, tag) = match full.as_deref() {
+                Some("HEAD") => (git::symbolic_ref_short(source_repo)?, None),
+                Some(s) if s.starts_with("refs/heads/") => {
+                    (Some(s["refs/heads/".len()..].to_string()), None)
+                }
+                Some(s) if s.starts_with("refs/tags/") => {
+                    (None, Some(s["refs/tags/".len()..].to_string()))
+                }
+                _ => (None, None),
+            };
+            Ok(Tip { sha, branch, tag })
         })
         .collect()
 }
@@ -295,7 +312,18 @@ async fn dispatch(
         };
         in_flight -= 1;
 
-        let target_sha = result?; // propagate transform errors immediately
+        let target_sha = match result {
+            Ok(sha) => sha,
+            Err(e) => {
+                // Drain remaining in-flight workers before returning the error
+                // so their tokio tasks don't outlive this function.
+                while in_flight > 0 {
+                    done_rx.recv().await;
+                    in_flight -= 1;
+                }
+                return Err(e);
+            }
+        };
         shared.lock().unwrap().insert(sha.clone(), target_sha);
 
         // Unblock children whose all missing parents are now done.
