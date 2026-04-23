@@ -58,18 +58,12 @@ async fn main() -> Result<()> {
 }
 
 fn common_git_dir() -> Result<PathBuf> {
-    let source_repo = PathBuf::from(git::repo_root()?);
-    let raw = git::git_common_dir()?;
-    Ok(if Path::new(&raw).is_absolute() {
-        PathBuf::from(raw)
-    } else {
-        source_repo.join(raw)
-    })
+    Ok(locate_repo()?.1)
 }
 
 fn locate_repo() -> Result<(PathBuf, PathBuf)> {
     let source_repo = PathBuf::from(git::repo_root()?);
-    let raw_git_dir = git::git_dir()?;
+    let raw_git_dir = git::git_common_dir()?;
     let git_dir = if Path::new(&raw_git_dir).is_absolute() {
         PathBuf::from(raw_git_dir)
     } else {
