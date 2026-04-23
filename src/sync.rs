@@ -52,7 +52,6 @@ async fn sync_one(
 
     let tip_shas = resolve_tips(source_repo, refs)?;
 
-    // ── walk the DAG to find commits not yet in the cache ─────────────────
     let pre_mapped = cache.all_mappings()?;
     let (missing, init_mappings) = find_missing(source_repo, &pre_mapped, &tip_shas)?;
 
@@ -68,7 +67,6 @@ async fn sync_one(
         return Ok(());
     }
 
-    // ── parallel dispatch ─────────────────────────────────────────────────
     if !missing.is_empty() {
         eprintln!("[{name}] transforming {} commit(s)...", missing.len());
         dispatch(
@@ -84,7 +82,6 @@ async fn sync_one(
         .await?;
     }
 
-    // ── mirror branches/tags from source whose tips are mapped in cache ───
     // Reload all mappings in one subprocess (dispatch may have added new ones).
     // This also runs when missing is empty, so a newly created branch pointing
     // to an already-mapped commit is propagated without transforming new commits.
@@ -111,8 +108,6 @@ async fn sync_one(
     }
     Ok(())
 }
-
-// ── helpers ───────────────────────────────────────────────────────────────
 
 fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<String>> {
     refs.iter()
@@ -215,7 +210,6 @@ async fn dispatch(
     init_mappings: HashMap<String, String>,
     jobs: usize,
 ) -> Result<()> {
-    // Build Kahn's in-degree and parent→children maps (within the missing set).
     let mut in_degree: HashMap<String, usize> =
         missing.keys().map(|k| (k.clone(), 0usize)).collect();
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
@@ -245,10 +239,9 @@ async fn dispatch(
     let mut in_flight: usize = 0;
 
     loop {
-        // Greedily spawn every unblocked commit up to the semaphore limit.
         while let Some(sha) = ready.front().cloned() {
             let Ok(permit) = semaphore.clone().try_acquire_owned() else {
-                break; // all slots occupied; fall through to await a completion
+                break;
             };
             ready.pop_front();
 
@@ -285,7 +278,6 @@ async fn dispatch(
             break;
         }
 
-        // Await the next completed commit.
         let Some((sha, result)) = done_rx.recv().await else {
             break;
         };
@@ -305,7 +297,6 @@ async fn dispatch(
         };
         shared.lock().unwrap().insert(sha.clone(), target_sha);
 
-        // Unblock children whose all missing parents are now done.
         if let Some(child_shas) = children.get(&sha) {
             for child in child_shas {
                 let d = in_degree.get_mut(child).unwrap();

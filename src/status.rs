@@ -27,7 +27,6 @@ pub fn run(
         return Ok(());
     }
 
-    // Iterate transformations in deterministic alphabetical order.
     let mut names: Vec<&String> = config.keys().collect();
     names.sort();
 

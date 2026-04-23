@@ -38,7 +38,6 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     let info = git::commit_info(&ctx.source_repo, &ctx.source_sha)?;
     let is_merge = info.parents.len() > 1;
 
-    // ── skip-commit-messages ──────────────────────────────────────────────
     if !is_merge {
         for pattern in &ctx.config.skip_commit_messages {
             if info.message.contains(pattern.as_str()) {
@@ -47,14 +46,12 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
         }
     }
 
-    // ── source worktree ───────────────────────────────────────────────────
     let src_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "src");
     std::fs::create_dir_all(src_wt.parent().unwrap())?;
     git::worktree_add(&ctx.source_repo, &src_wt, &ctx.source_sha)?;
     // force=true because rule.command leaves modified/untracked files behind
     let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
 
-    // ── run rule command ──────────────────────────────────────────────────
     match run_rule(&src_wt, &ctx.config.rule.command) {
         Ok(()) => {}
         Err(stderr) => match ctx.config.ignore_error {
@@ -84,7 +81,6 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
         },
     }
 
-    // ── orphan target worktree ────────────────────────────────────────────
     let tgt_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "tgt");
     // If a previous run crashed before WorktreeGuard::drop could clean up,
     // the directory (and its git registration) may still exist.  Force-remove
@@ -102,14 +98,10 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true)
         .with_orphan_branch(branch);
 
-    // ── populate target worktree ──────────────────────────────────────────
     copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?;
-
-    // ── snapshot (always `add .`; tgt_wt contains only what we copied) ───
     git::git_add_all(&tgt_wt)?;
     let tree = git::write_tree(&tgt_wt)?;
 
-    // ── changeless ────────────────────────────────────────────────────────
     if !is_merge {
         if let Some(p_tree) = parent_tree_sha_opt(ctx)? {
             if tree == p_tree {
@@ -121,7 +113,6 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
         }
     }
 
-    // ── create commit ─────────────────────────────────────────────────────
     let msg = normal_message(&info.message, &ctx.source_sha, &ctx.name);
     create_and_record(ctx, &tree, &msg, &info)
 }
