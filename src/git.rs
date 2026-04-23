@@ -161,45 +161,6 @@ pub fn update_ref(repo: &Path, refname: &str, sha: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn delete_ref(repo: &Path, refname: &str) -> Result<()> {
-    run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["update-ref", "-d", refname]),
-        repo,
-    )?;
-    Ok(())
-}
-
-pub fn read_ref(repo: &Path, refname: &str) -> Result<Option<String>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["rev-parse", "--quiet", "--verify", refname])
-        .output()
-        .map_err(|e| Error::Git {
-            repo: repo.display().to_string(),
-            message: e.to_string(),
-            stderr: String::new(),
-        })?;
-    match out.status.code() {
-        Some(0) => Ok(Some(
-            String::from_utf8_lossy(&out.stdout)
-                .trim_end()
-                .to_string(),
-        )),
-        // --quiet exits 1 (not 128) when the ref simply does not exist.
-        Some(1) => Ok(None),
-        _ => Err(Error::Git {
-            repo: repo.display().to_string(),
-            message: format!("git rev-parse --verify {refname} failed"),
-            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
-        }
-        .into()),
-    }
-}
-
 pub fn push(repo: &Path, refspecs: &[String]) -> Result<()> {
     if refspecs.is_empty() {
         return Ok(());
@@ -229,26 +190,6 @@ pub fn commit_tree_sha(repo: &Path, sha: &str) -> Result<String> {
             .args(["rev-parse", &format!("{sha}^{{tree}}")]),
         repo,
     )
-}
-
-pub fn log_ancestry(repo: &Path, sha: &str) -> Result<Vec<(String, Vec<String>)>> {
-    let out = run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["log", "--format=%H %P", sha]),
-        repo,
-    )?;
-    let mut result = Vec::new();
-    for line in out.lines() {
-        let mut parts = line.split_whitespace();
-        let commit = parts.next().unwrap_or("").to_string();
-        let parents: Vec<String> = parts.map(str::to_owned).collect();
-        if !commit.is_empty() {
-            result.push((commit, parents));
-        }
-    }
-    Ok(result)
 }
 
 pub fn clone_bare(target_url: &str, dest: &Path) -> Result<()> {
@@ -458,24 +399,3 @@ pub fn git_common_dir() -> Result<String> {
     }
 }
 
-pub fn git_dir() -> Result<String> {
-    let cwd = Path::new(".");
-    let out = Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .map_err(|e| Error::Git {
-            repo: cwd.display().to_string(),
-            message: e.to_string(),
-            stderr: String::new(),
-        })?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
-    } else {
-        Err(Error::Git {
-            repo: cwd.display().to_string(),
-            message: "not inside a git repository".to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
-        }
-        .into())
-    }
-}

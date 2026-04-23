@@ -8,8 +8,6 @@ pub enum Error {
         message: String,
         stderr: String,
     },
-    #[error("config error: {0}")]
-    Config(String),
     #[error("transform '{name}' failed on {sha}: {stderr}")]
     Transform {
         name: String,
