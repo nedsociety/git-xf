@@ -77,6 +77,17 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
 
     // ── orphan target worktree ────────────────────────────────────────────
     let tgt_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "tgt");
+    // If a previous run crashed before WorktreeGuard::drop could clean up,
+    // the directory (and its git registration) may still exist.  Force-remove
+    // it so the add below succeeds.  Errors are intentionally ignored: the
+    // remove is best-effort and worktree_add_orphan will fail with a clear
+    // message if the path is genuinely in use.
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&ctx.cache.path)
+        .args(["worktree", "remove", "--force"])
+        .arg(&tgt_wt)
+        .output();
     let branch = format!("xf-work-{}", &ctx.source_sha);
     git::worktree_add_orphan(&ctx.cache.path, &tgt_wt, &branch)?;
     let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true);
