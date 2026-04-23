@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 
 use crate::cache::Cache;
 use crate::config::{ChangelessPolicy, IgnoreErrorPolicy, TransformConfig};
+use crate::error::Error;
 use crate::git::{self, CommitInfo, CommitTreeArgs};
 
 // Well-known SHA of git's empty tree object.
@@ -48,7 +49,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
 
     // ── source worktree ───────────────────────────────────────────────────
     let src_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "src");
-    std::fs::create_dir_all(&src_wt)?;
+    std::fs::create_dir_all(src_wt.parent().unwrap())?;
     git::worktree_add(&ctx.source_repo, &src_wt, &ctx.source_sha)?;
     // force=true because rule.command leaves modified/untracked files behind
     let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
@@ -57,12 +58,14 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     match run_rule(&src_wt, &ctx.config.rule.command) {
         Ok(()) => {}
         Err(stderr) => match ctx.config.ignore_error {
-            IgnoreErrorPolicy::Error => bail!(
-                "transform '{}' failed on {}: {}",
-                ctx.name,
-                ctx.source_sha,
-                stderr
-            ),
+            IgnoreErrorPolicy::Error => {
+                return Err(Error::Transform {
+                    name: ctx.name.clone(),
+                    sha: ctx.source_sha.clone(),
+                    stderr,
+                }
+                .into());
+            }
             IgnoreErrorPolicy::Skip => return skip_to_parent(ctx),
             IgnoreErrorPolicy::EmptyCommit => {
                 let tree = parent_tree_sha(ctx)?;
@@ -73,6 +76,9 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     }
 
     // ── orphan target worktree ────────────────────────────────────────────
+    // Prune before adding so a stale entry from a previous crash (directory
+    // already gone) doesn't block re-creation of the same worktree path.
+    git::worktree_prune(&ctx.cache.path)?;
     let tgt_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "tgt");
     let branch = format!("xf-work-{}", &ctx.source_sha);
     git::worktree_add_orphan(&ctx.cache.path, &tgt_wt, &branch)?;
@@ -82,7 +88,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?;
 
     // ── snapshot (always `add .`; tgt_wt contains only what we copied) ───
-    git::git_add_all(&tgt_wt, &[])?;
+    git::git_add_all(&tgt_wt)?;
     let tree = git::write_tree(&tgt_wt)?;
 
     // ── changeless ────────────────────────────────────────────────────────
@@ -215,7 +221,7 @@ fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &[String]) -> Result<()> {
     for rel in output {
         let src = src_wt.join(rel);
         let tgt = tgt_wt.join(rel);
-        if !src.exists() {
+        if std::fs::symlink_metadata(&src).is_err() {
             continue; // path absent in this commit — produce no output for it
         }
         let meta = std::fs::symlink_metadata(&src)?;
@@ -296,6 +302,17 @@ impl Drop for WorktreeGuard {
             cmd.arg("--force");
         }
         cmd.arg(&self.path);
-        let _ = cmd.output();
+        match cmd.output() {
+            Ok(out) if !out.status.success() => eprintln!(
+                "warning: git worktree remove failed for {}: {}",
+                self.path.display(),
+                String::from_utf8_lossy(&out.stderr).trim_end(),
+            ),
+            Err(e) => eprintln!(
+                "warning: could not run git worktree remove for {}: {e}",
+                self.path.display(),
+            ),
+            Ok(_) => {}
+        }
     }
 }

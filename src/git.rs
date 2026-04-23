@@ -50,7 +50,7 @@ pub fn commit_info(repo: &Path, sha: &str) -> Result<CommitInfo> {
         Command::new("git")
             .arg("-C")
             .arg(repo)
-            .args(["show", "-s", &format!("--format={fmt}"), sha]),
+            .args(["show", "-s", &format!("--pretty=tformat:{fmt}"), sha]),
         repo,
     )?;
 
@@ -93,18 +93,6 @@ pub fn worktree_add_orphan(repo: &Path, wt_path: &Path, branch: &str) -> Result<
             .arg("-C")
             .arg(repo)
             .args(["worktree", "add", "--orphan", "-b", branch])
-            .arg(wt_path),
-        repo,
-    )?;
-    Ok(())
-}
-
-pub fn worktree_remove_force(repo: &Path, wt_path: &Path) -> Result<()> {
-    run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["worktree", "remove", "--force"])
             .arg(wt_path),
         repo,
     )?;
@@ -218,17 +206,11 @@ pub fn push(repo: &Path, refspecs: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn git_add_all(wt_path: &Path, paths: &[String]) -> Result<()> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(wt_path).arg("add");
-    if paths.is_empty() {
-        cmd.arg(".");
-    } else {
-        for p in paths {
-            cmd.arg(p);
-        }
-    }
-    run(&mut cmd, wt_path)?;
+pub fn git_add_all(wt_path: &Path) -> Result<()> {
+    run(
+        Command::new("git").arg("-C").arg(wt_path).args(["add", "."]),
+        wt_path,
+    )?;
     Ok(())
 }
 
