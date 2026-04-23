@@ -83,7 +83,7 @@ pub fn run(
                     }
                 }
             };
-            println!("  {}  {:<7}  {}", &sha[..8], status, subject);
+            println!("  {}  {:<7}  {}", sha.get(..8).unwrap_or(sha), status, subject);
         }
         println!();
     }
