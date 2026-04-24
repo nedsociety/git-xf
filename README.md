@@ -56,8 +56,11 @@ protocol-codegen:
 
   rule:
     command: make generate
-    output:           # paths to stage in target; omit to stage the entire worktree
-      - protocol/
+    # output accepts a list of "src:dst" pairs, a {src: dst} map, a single
+    # string, or null/omitted to stage the entire source worktree.
+    # Source paths may be absolute (useful for out-of-tree build dirs).
+    output:
+      - protocol/:.   # copy protocol/ from source into the target root
 
   changeless: skip           # empty-commit | skip
   ignore-error: error        # error | empty-commit | skip
@@ -72,9 +75,15 @@ artifacts:
   target: ../local-artifacts-repo
 
   rule:
-    command: make build
-    output:
-      - dist/
+    shell: bash              # sh (default) | bash | zsh | any shell on PATH
+    # targetEnv enables "build-your-own-target" mode: git-xf creates an empty
+    # directory and passes its path via the named env var. The command is
+    # responsible for populating it; that directory becomes the target commit.
+    # Mutually exclusive with output.
+    command: |
+      make build
+      cp -r dist/ "$XF_TARGET/"
+    targetEnv: XF_TARGET
 
   changeless: empty-commit
   ignore-error: empty-commit
@@ -88,11 +97,35 @@ artifacts:
 |---|---|---|---|
 | `target` | string | required | Path or URL to the target git repository |
 | `rule.command` | string | required | Shell command run in the source worktree root on each commit |
-| `rule.output` | list of paths | entire worktree | Files/directories to copy into the target commit |
+| `rule.shell` | string | `"sh"` | Shell used to run `command`. `"sh"` → `sh -c`; anything else → `/usr/bin/env $shell -c` |
+| `rule.output` | string \| list \| map | entire worktree | Output-mode: files/dirs to copy from source worktree into the target commit. Each entry is `"src"` (same destination) or `"src:dst"`. Source paths may be absolute. Mutually exclusive with `targetEnv`. |
+| `rule.targetEnv` | string | — | Build-your-own-target mode: name of the env var seeded with a fresh empty directory that `command` should populate. Mutually exclusive with `output`. |
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring-match against the source commit message; matched commits map to their first parent's target commit. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command` |
 | `branches` | list of strings | `[]` | Branch whitelist for automatic syncs (hook / CI). Has no effect on manual `git xf sync`. |
+
+### `rule.output` formats
+
+All four of these are equivalent:
+
+```yaml
+# null / omitted — stage entire source worktree
+output:
+
+# single string
+output: "src:dst"
+
+# list of strings
+output:
+  - generated/:.    # copy generated/ into target root
+  - /tmp/build/extra.txt:extras/extra.txt  # absolute source path
+
+# map
+output:
+  generated/: .
+  /tmp/build/extra.txt: extras/extra.txt
+```
 
 ---
 
@@ -164,7 +197,9 @@ For each source commit, `git xf sync`:
 
 1. Checks whether `refs/git-xf/<name>/<source-sha>` already exists in the local cache.
 2. Topologically sorts unmapped commits and transforms them in dependency order (parallelised by `--jobs`).
-3. Each transform: checks out the source commit in a temporary worktree → runs `rule.command` → copies `rule.output` into an orphaned target worktree → runs `write-tree` / `commit-tree` → records the mapping ref.
+3. Each transform: checks out the source commit in a temporary worktree → runs `rule.command` → stages the result into an orphaned target worktree → runs `write-tree` / `commit-tree` → records the mapping ref.
+   - **Output mode** (`rule.output`): copies declared paths from the source worktree into the target worktree.
+   - **BYOT mode** (`rule.targetEnv`): `command` receives a fresh empty directory and populates it directly; git-xf stages its contents.
 4. Performs a single `git push` with all new mapping refs and updated branch/tag refs.
 
 `GIT_COMMITTER_DATE` is set to the source commit date so that the same input always produces the same target SHA, making syncs idempotent.
