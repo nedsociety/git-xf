@@ -1050,6 +1050,82 @@ fn test_rule_output_empty_list_and_byot_conflict() {
     );
 }
 
+/// A non-sh shell (bash) is invoked via /usr/bin/env and can use bash-specific syntax.
+#[test]
+fn test_rule_shell_bash() {
+    // bash-specific: process substitution to write output
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             shell: bash
+             command: 'printf \"%s\" \"$(echo hello)\" > out.txt'
+             output: [out.txt]
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("dummy.txt", "x")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let content = env.target_file_content(&tip, "out.txt");
+    assert_eq!(content.trim(), "hello");
+}
+
+/// An absolute source path in `output` is used as-is (out-of-tree build dir).
+#[test]
+fn test_rule_output_absolute_src_path() {
+    // The command writes to /tmp; the output entry uses an absolute source path.
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'printf \"from-abs\" > /tmp/git-xf-test-abs-output.txt'
+             output:
+               - /tmp/git-xf-test-abs-output.txt:result.txt
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("dummy.txt", "x")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let content = env.target_file_content(&tip, "result.txt");
+    assert_eq!(content.trim(), "from-abs");
+}
+
+/// A `.git` file/directory placed inside the BYOT staging dir is not copied
+/// into the target worktree and does not corrupt the target cache.
+#[test]
+fn test_rule_byot_git_entry_not_copied() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: |
+               printf \"data\" > \"$XF_TARGET/real.txt\"
+               printf \"should-not-appear\" > \"$XF_TARGET/.git\"
+             targetEnv: XF_TARGET
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("src.txt", "x")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let files = env.target_tree_files(&tip);
+    assert!(
+        files.contains(&"real.txt".to_string()),
+        "real.txt missing: {files:?}"
+    );
+    assert!(
+        !files.contains(&".git".to_string()),
+        ".git entry must not appear in the target commit: {files:?}"
+    );
+    let content = env.target_file_content(&tip, "real.txt");
+    assert_eq!(content.trim(), "data");
+}
+
 fn indoc(s: &str) -> String {
     // Strip common leading whitespace so inline test configs stay readable.
     let indent = s

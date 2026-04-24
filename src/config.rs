@@ -9,7 +9,8 @@ use serde::Deserialize;
 
 /// Normalized `(source_path, target_path)` pairs from the `output` field.
 ///
-/// An empty vec means "copy the entire source worktree" (field was absent or null).
+/// An empty vec means "copy nothing". Absent/null is represented as `None` at
+/// the `Option<OutputSpec>` level in `RuleConfig` and means "whole worktree".
 #[derive(Debug, Clone, Default)]
 pub struct OutputSpec(Vec<(String, String)>);
 
@@ -27,15 +28,7 @@ impl<'de> Deserialize<'de> for OutputSpec {
             type Value = OutputSpec;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(f, "null, a string, a list of strings, or a map of strings")
-            }
-
-            fn visit_unit<E: serde::de::Error>(self) -> Result<OutputSpec, E> {
-                Ok(OutputSpec::default())
-            }
-
-            fn visit_none<E: serde::de::Error>(self) -> Result<OutputSpec, E> {
-                Ok(OutputSpec::default())
+                write!(f, "a string, a list of strings, or a map of strings")
             }
 
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<OutputSpec, E> {

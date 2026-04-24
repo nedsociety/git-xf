@@ -101,7 +101,7 @@ artifacts:
 | `target` | string | required | Path or URL to the target git repository |
 | `rule.command` | string | required | Shell command to run on each source commit (runs in the source worktree root) |
 | `rule.shell` | string | `"sh"` | Shell used to run `command`. `"sh"` → `sh -c`; anything else → `/usr/bin/env $shell -c` |
-| `rule.output` | string \| list \| map | entire worktree | Output mode: files/dirs to copy into the target commit. Each entry is `"src"` or `"src:dst"`; source paths may be absolute. Mutually exclusive with `targetEnv`. |
+| `rule.output` | string \| list \| map | entire worktree | Output mode: files/dirs to copy into the target commit. Each entry is `"src"` or `"src:dst"`; source paths may be absolute. An explicit empty list (`[]`) means copy nothing. Mutually exclusive with `targetEnv`. |
 | `rule.targetEnv` | string | — | Build-your-own-target mode: name of the env var seeded with a fresh empty directory that `command` should populate. Mutually exclusive with `output`. |
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous target commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring match against source commit message; matched commits are mapped to their first parent's target commit. Never applies to merge commits. |
