@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use crate::cache::Cache;
 use crate::config::{ChangelessPolicy, IgnoreErrorPolicy, OutputSpec, RuleConfig, TransformConfig};
@@ -31,10 +31,14 @@ pub struct TransformCtx {
 
 /// Transforms one source commit and returns the resulting target SHA.
 ///
-/// Records the source→target mapping in the cache before returning.
+/// Returns `Ok(None)` when the commit is dropped with no ancestor to map to
+/// (a root commit that hits a skip policy). In all other cases returns
+/// `Ok(Some(sha))`. Records the source→target mapping in the cache before
+/// returning (skipped roots are NOT recorded — they have no mapping).
+///
 /// Callers are responsible for acquiring any concurrency semaphore permit
 /// before calling this.
-pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
+pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     let info = git::commit_info(&ctx.source_repo, &ctx.source_sha)?;
     let is_merge = info.parents.len() > 1;
 
@@ -80,14 +84,14 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
                     // fall back to empty-commit to preserve all parent edges.
                     let tree = parent_tree_sha(ctx)?;
                     let msg = error_message(&ctx.name, &ctx.source_sha, &stderr);
-                    return create_and_record(ctx, &tree, &msg, &info);
+                    return create_and_record(ctx, &tree, &msg, &info).map(Some);
                 }
                 return skip_to_parent(ctx);
             }
             IgnoreErrorPolicy::EmptyCommit => {
                 let tree = parent_tree_sha(ctx)?;
                 let msg = error_message(&ctx.name, &ctx.source_sha, &stderr);
-                return create_and_record(ctx, &tree, &msg, &info);
+                return create_and_record(ctx, &tree, &msg, &info).map(Some);
             }
         },
     }
@@ -128,21 +132,24 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     }
 
     let msg = normal_message(&info.message, &ctx.source_sha, &ctx.name);
-    create_and_record(ctx, &tree, &msg, &info)
+    create_and_record(ctx, &tree, &msg, &info).map(Some)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Records source→parent mapping and returns the parent target SHA.
-fn skip_to_parent(ctx: &TransformCtx) -> Result<String> {
-    let sha = ctx.target_parents.first().cloned().ok_or_else(|| {
-        anyhow!(
-            "commit {} has no parent but a skip policy was applied",
-            ctx.source_sha
-        )
-    })?;
-    ctx.cache.set_mapping(&ctx.source_sha, &sha)?;
-    Ok(sha)
+///
+/// Returns `Ok(None)` if the commit is a root with no parent to skip to —
+/// the commit is dropped entirely and no cache entry is written.
+fn skip_to_parent(ctx: &TransformCtx) -> Result<Option<String>> {
+    match ctx.target_parents.first() {
+        Some(sha) => {
+            let sha = sha.clone();
+            ctx.cache.set_mapping(&ctx.source_sha, &sha)?;
+            Ok(Some(sha))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Parent's tree SHA, or the empty-tree SHA for root commits.

@@ -75,6 +75,49 @@ impl Env {
         git_read(&self.source, &["rev-parse", "HEAD"])
     }
 
+    fn merge_unrelated(&self, branch: &str, msg: &str) -> String {
+        git(
+            &self.source,
+            &[
+                "merge",
+                "--no-ff",
+                "--allow-unrelated-histories",
+                "-m",
+                msg,
+                branch,
+            ],
+        );
+        git_read(&self.source, &["rev-parse", "HEAD"])
+    }
+
+    /// Creates an orphan branch (no parents) with the given commit.
+    fn commit_orphan(&self, branch: &str, msg: &str, files: &[(&str, &str)]) -> String {
+        git(&self.source, &["checkout", "--orphan", branch]);
+        // `--orphan` inherits the index and working tree from the previous checkout.
+        // Remove all tracked content from the index and then clean untracked files
+        // so only the files we explicitly provide end up in this commit.
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(&self.source)
+            .args(["rm", "-rf", "--cached", "."])
+            .output();
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(&self.source)
+            .args(["clean", "-fdx", "--", "."])
+            .output();
+        for (name, content) in files {
+            let p = self.source.join(name);
+            if let Some(dir) = p.parent() {
+                fs::create_dir_all(dir).unwrap();
+            }
+            fs::write(p, content).unwrap();
+        }
+        git(&self.source, &["add", "."]);
+        git(&self.source, &["commit", "--allow-empty", "-m", msg]);
+        git_read(&self.source, &["rev-parse", "HEAD"])
+    }
+
     // ── subcommand helpers ────────────────────────────────────────────────────
 
     fn run_status(&self, extra_args: &[&str]) -> String {
@@ -1124,6 +1167,147 @@ fn test_rule_byot_git_entry_not_copied() {
     );
     let content = env.target_file_content(&tip, "real.txt");
     assert_eq!(content.trim(), "data");
+}
+
+// ── skip on root commit ───────────────────────────────────────────────────────
+
+/// `ignore-error: skip` on the very first (root) commit drops it entirely —
+/// no mapping ref is created and the sync still succeeds.
+#[test]
+fn test_ignore_error_skip_root_dropped() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'exit 1'
+           ignore-error: skip
+        ",
+    );
+    let env = Env::new(&config);
+    let root_sha = env.commit("root fails", &[("a.txt", "a")]);
+    env.sync(&[]);
+
+    assert!(
+        !env.target_ref_exists(&format!("refs/git-xf/test/{root_sha}")),
+        "dropped root should have no mapping ref"
+    );
+    assert_eq!(env.target_commit_count("refs/heads/main"), 0);
+}
+
+/// The child of a dropped root has no target parents — it becomes the target root.
+#[test]
+fn test_ignore_error_skip_root_child_becomes_target_root() {
+    // Command succeeds only when ok.txt exists. ROOT has no ok.txt (fails → dropped);
+    // CHILD adds ok.txt so the tree contains it (succeeds).
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: '[ -f ok.txt ]'
+           ignore-error: skip
+        ",
+    );
+    let env = Env::new(&config);
+    let root_sha = env.commit("root will fail", &[("other.txt", "x")]);
+    let child_sha = env.commit("child succeeds", &[("ok.txt", "good")]);
+    env.sync(&[]);
+
+    assert!(
+        !env.target_ref_exists(&format!("refs/git-xf/test/{root_sha}")),
+        "dropped root should have no mapping ref"
+    );
+
+    let child_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{child_sha}"))
+        .expect("child should have a mapping ref");
+    assert_eq!(
+        env.target_parent_count(&child_target),
+        0,
+        "child of dropped root should be a target root (0 parents)"
+    );
+    assert_eq!(env.target_commit_count("refs/heads/main"), 1);
+}
+
+/// `skip-commit-messages` applied to the root commit drops it — the next commit
+/// becomes the target root.
+#[test]
+fn test_skip_commit_messages_root_dropped() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+           skip-commit-messages:
+             - '[drop-me]'
+        ",
+    );
+    let env = Env::new(&config);
+    let root_sha = env.commit("init [drop-me]", &[("a.txt", "a")]);
+    let child_sha = env.commit("real first commit", &[("b.txt", "b")]);
+    env.sync(&[]);
+
+    assert!(
+        !env.target_ref_exists(&format!("refs/git-xf/test/{root_sha}")),
+        "skipped root should have no mapping ref"
+    );
+
+    let child_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{child_sha}"))
+        .expect("child should have a mapping ref");
+    assert_eq!(
+        env.target_parent_count(&child_target),
+        0,
+        "child of skipped root should be a target root (0 parents)"
+    );
+}
+
+/// A merge commit whose one parent was a dropped root gets one fewer parent in
+/// the target — the dropped parent is silently omitted from the parent list.
+#[test]
+fn test_ignore_error_skip_merge_drops_failed_root_parent() {
+    // Command succeeds if ok.txt exists; fails otherwise.
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: '[ -f ok.txt ]'
+           ignore-error: skip
+        ",
+    );
+    let env = Env::new(&config);
+
+    // Root on main (ok.txt present → succeeds).
+    let root_main = env.commit("main root", &[("ok.txt", "yes")]);
+
+    // Orphan root on "side" (no ok.txt → fails → dropped).
+    let root_side = env.commit_orphan("side", "side root", &[("other.txt", "no")]);
+
+    // Merge the unrelated side branch into main.
+    env.checkout("main");
+    let merge_sha = env.merge_unrelated("side", "merge unrelated histories");
+
+    env.sync(&[]);
+
+    // side root has no mapping (it was dropped).
+    assert!(
+        !env.target_ref_exists(&format!("refs/git-xf/test/{root_side}")),
+        "dropped side root should have no mapping ref"
+    );
+
+    // main root is mapped.
+    let _target_root_main = env
+        .target_ref_sha(&format!("refs/git-xf/test/{root_main}"))
+        .expect("main root should be mapped");
+
+    // Merge commit is mapped and has only 1 parent (the dropped root was excluded).
+    let target_merge = env
+        .target_ref_sha(&format!("refs/git-xf/test/{merge_sha}"))
+        .expect("merge commit should be mapped");
+    assert_eq!(
+        env.target_parent_count(&target_merge),
+        1,
+        "merge with one dropped parent should have 1 parent in target"
+    );
 }
 
 fn indoc(s: &str) -> String {
