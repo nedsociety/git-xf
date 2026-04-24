@@ -892,3 +892,250 @@ test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  branches:\n   
         "main should not be pushed"
     );
 }
+
+// ── rule: shell, output paths, BYOT ──────────────────────────────────────────
+
+/// Explicit `shell: sh` behaves identically to the default.
+#[test]
+fn test_rule_explicit_sh_shell() {
+    let config = "test:\n  target: ../target.git\n  rule:\n    shell: sh\n    command: \"true\"\n";
+    let env = Env::new(config);
+    env.commit("first", &[("a.txt", "hello")]);
+    env.sync(&[]);
+    assert_eq!(env.target_commit_count("refs/heads/main"), 1);
+}
+
+/// `output` as a list of `src:dst` pairs copies into the specified target paths.
+#[test]
+fn test_rule_output_src_dst() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+             output:
+               - src/data.txt:dst/data.txt
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("add file", &[("src/data.txt", "payload")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let files = env.target_tree_files(&tip);
+    // Target root should contain dst/, not src/.
+    assert!(
+        files.contains(&"dst".to_string()),
+        "dst/ missing: {files:?}"
+    );
+    assert!(
+        !files.contains(&"src".to_string()),
+        "src/ should not be in target"
+    );
+
+    let content = env.target_file_content(&tip, "dst/data.txt");
+    assert_eq!(content.trim(), "payload");
+}
+
+/// `output` as a `{src: dst}` map is equivalent to the list form.
+#[test]
+fn test_rule_output_map_format() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+             output:
+               src/: out/
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("add file", &[("src/file.txt", "content")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let content = env.target_file_content(&tip, "out/file.txt");
+    assert_eq!(content.trim(), "content");
+}
+
+/// Build-your-own-target mode: `command` populates `$TARGET_PATH`; the result
+/// becomes the target commit tree, independent of what `output` would have done.
+#[test]
+fn test_rule_byot() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'cp src.txt \"$XF_TARGET\"/result.txt'
+             targetEnv: XF_TARGET
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("src.txt", "byot-payload")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let files = env.target_tree_files(&tip);
+    assert!(
+        files.contains(&"result.txt".to_string()),
+        "result.txt missing from target: {files:?}"
+    );
+    // src.txt should NOT be in the target — only what the command placed in $XF_TARGET.
+    assert!(
+        !files.contains(&"src.txt".to_string()),
+        "src.txt should not be in target"
+    );
+    let content = env.target_file_content(&tip, "result.txt");
+    assert_eq!(content.trim(), "byot-payload");
+}
+
+/// Using both `output` (non-empty) and `targetEnv` in the same rule is a config error.
+#[test]
+fn test_rule_output_and_byot_conflict() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+             output: [some/path]
+             targetEnv: XF_TARGET
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("a.txt", "a")]);
+    // sync should fail at config validation, not crash
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .arg("sync")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "sync should have failed with a config error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("targetEnv") || stderr.contains("output"),
+        "error message should mention the conflicting fields: {stderr}"
+    );
+}
+
+/// An explicit empty `output: []` combined with `targetEnv` is also a config error.
+#[test]
+fn test_rule_output_empty_list_and_byot_conflict() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+             output: []
+             targetEnv: XF_TARGET
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("a.txt", "a")]);
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .arg("sync")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "sync should have failed with a config error for output: [] + targetEnv"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("targetEnv") || stderr.contains("output"),
+        "error message should mention the conflicting fields: {stderr}"
+    );
+}
+
+/// A non-sh shell (bash) is invoked via /usr/bin/env and can use bash-specific syntax.
+#[test]
+fn test_rule_shell_bash() {
+    // bash-specific: process substitution to write output
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             shell: bash
+             command: 'printf \"%s\" \"$(echo hello)\" > out.txt'
+             output: [out.txt]
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("dummy.txt", "x")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let content = env.target_file_content(&tip, "out.txt");
+    assert_eq!(content.trim(), "hello");
+}
+
+/// An absolute source path in `output` is used as-is (out-of-tree build dir).
+#[test]
+fn test_rule_output_absolute_src_path() {
+    // The command writes to /tmp; the output entry uses an absolute source path.
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'printf \"from-abs\" > /tmp/git-xf-test-abs-output.txt'
+             output:
+               - /tmp/git-xf-test-abs-output.txt:result.txt
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("dummy.txt", "x")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let content = env.target_file_content(&tip, "result.txt");
+    assert_eq!(content.trim(), "from-abs");
+}
+
+/// A `.git` file/directory placed inside the BYOT staging dir is not copied
+/// into the target worktree and does not corrupt the target cache.
+#[test]
+fn test_rule_byot_git_entry_not_copied() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: |
+               printf \"data\" > \"$XF_TARGET/real.txt\"
+               printf \"should-not-appear\" > \"$XF_TARGET/.git\"
+             targetEnv: XF_TARGET
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("src.txt", "x")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let files = env.target_tree_files(&tip);
+    assert!(
+        files.contains(&"real.txt".to_string()),
+        "real.txt missing: {files:?}"
+    );
+    assert!(
+        !files.contains(&".git".to_string()),
+        ".git entry must not appear in the target commit: {files:?}"
+    );
+    let content = env.target_file_content(&tip, "real.txt");
+    assert_eq!(content.trim(), "data");
+}
+
+fn indoc(s: &str) -> String {
+    // Strip common leading whitespace so inline test configs stay readable.
+    let indent = s
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    s.lines()
+        .map(|l| if l.len() >= indent { &l[indent..] } else { l })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

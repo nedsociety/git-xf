@@ -59,8 +59,11 @@ protocol-codegen:
 
   rule:
     command: make generate
-    output:           # paths to stage in target; omit to stage entire worktree
-      - protocol/
+    # output accepts: null/omitted (entire worktree), a single "src:dst" string,
+    # a list of "src[:dst]" strings, or a {src: dst} map.
+    # Source paths may be absolute (for out-of-tree build dirs).
+    output:
+      - protocol/:.  # copy protocol/ from source into the target root
 
   changeless: empty-commit   # empty-commit | skip
 
@@ -76,9 +79,14 @@ artifacts:
   target: ../local-artifacts-repo
 
   rule:
-    command: make build
-    output:
-      - dist/
+    shell: bash              # sh (default) | any shell reachable via /usr/bin/env
+    # targetEnv enables build-your-own-target mode: git-xf creates a fresh empty
+    # directory and passes its path via the named env var. command populates it;
+    # that directory becomes the target commit tree. Mutually exclusive with output.
+    command: |
+      make build
+      cp -r dist/ "$XF_TARGET/"
+    targetEnv: XF_TARGET
 
   changeless: empty-commit
   ignore-error: error
@@ -92,7 +100,9 @@ artifacts:
 |---|---|---|---|
 | `target` | string | required | Path or URL to the target git repository |
 | `rule.command` | string | required | Shell command to run on each source commit (runs in the source worktree root) |
-| `rule.output` | list of paths | entire worktree | Files/directories to copy from the source worktree into the target commit |
+| `rule.shell` | string | `"sh"` | Shell used to run `command`. `"sh"` → `sh -c`; anything else → `/usr/bin/env $shell -c` |
+| `rule.output` | string \| list \| map | entire worktree | Output mode: files/dirs to copy into the target commit. Each entry is `"src"` or `"src:dst"`; source paths may be absolute. An explicit empty list (`[]`) means copy nothing. Mutually exclusive with `targetEnv`. |
+| `rule.targetEnv` | string | — | Build-your-own-target mode: name of the env var seeded with a fresh empty directory that `command` should populate. Mutually exclusive with `output`. |
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous target commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring match against source commit message; matched commits are mapped to their first parent's target commit. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command` |
@@ -171,7 +181,9 @@ Per commit:
    git -C .git/git-xf/<name>.git worktree add --orphan -b xf-work-<source-sha> <tgt-wt-path>
    ```
 
-4. **Populate**: copy `rule.output` paths from `<src-wt-path>` to `<tgt-wt-path>`. If `output` is omitted, copy the entire source worktree excluding `.git`.
+4. **Populate** the target worktree — two modes:
+   - **Output mode** (`targetEnv` absent): copy `rule.output` entries from `<src-wt-path>` to `<tgt-wt-path>`. Each entry is a `(src, dst)` pair; source paths may be absolute. If `output` is omitted/null, copy the entire source worktree excluding `.git`.
+   - **Build-your-own-target mode** (`targetEnv` set): create a fresh empty temp directory, expose its path as `$(<targetEnv>)` in `rule.command`'s environment, then copy the temp directory's contents into `<tgt-wt-path>` after the command exits.
 
 5. **Snapshot**:
    ```
