@@ -96,8 +96,10 @@ async fn sync_one(
     // This also runs when missing is empty, so a newly created branch pointing
     // to an already-mapped commit is propagated without transforming new commits.
     let post_mapped = cache.all_mappings()?;
+    // Only push mapping refs for commits that got a real mapping (not dropped roots).
     let mut refspecs: Vec<String> = missing
         .keys()
+        .filter(|sha| post_mapped.contains_key(*sha))
         .map(|sha| {
             let r = cache.mapping_ref(sha);
             format!("{r}:{r}")
@@ -124,7 +126,8 @@ fn resolve_tips(source_repo: &Path, refs: &[String]) -> Result<Vec<String>> {
 }
 
 type MissingMap = HashMap<String, Vec<String>>;
-type KnownMap = HashMap<String, String>;
+/// `source_sha → Some(target_sha)` for mapped commits, `None` for dropped roots.
+type KnownMap = HashMap<String, Option<String>>;
 
 /// BFS from `tips`, collecting commits not yet present in `cached`.
 ///
@@ -138,7 +141,7 @@ fn find_missing(
     tips: &[String],
 ) -> Result<(MissingMap, KnownMap)> {
     let mut missing: HashMap<String, Vec<String>> = HashMap::new();
-    let mut known: HashMap<String, String> = HashMap::new();
+    let mut known: HashMap<String, Option<String>> = HashMap::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     let mut visited: HashSet<String> = HashSet::new();
 
@@ -150,7 +153,7 @@ fn find_missing(
 
     while let Some(sha) = queue.pop_front() {
         if let Some(target_sha) = cached.get(&sha) {
-            known.insert(sha, target_sha.clone());
+            known.insert(sha, Some(target_sha.clone()));
             continue; // already done; don't recurse further
         }
         let info = git::commit_info(source_repo, &sha)?;
@@ -256,10 +259,11 @@ async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMa
 
     // Shared mapping table: pre-seeded with already-known target SHAs so
     // target_parents lookups work for commits whose parents were already in
-    // the cache.
-    let shared: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(init_mappings));
+    // the cache. `None` entries represent dropped root commits.
+    let shared: Arc<Mutex<HashMap<String, Option<String>>>> = Arc::new(Mutex::new(init_mappings));
     let semaphore = Arc::new(Semaphore::new(jobs.max(1)));
-    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<(String, Result<String>)>();
+    let (done_tx, mut done_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(String, Result<Option<String>>)>();
     let mut in_flight: usize = 0;
 
     loop {
@@ -273,7 +277,7 @@ async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMa
                 let m = shared.lock().unwrap();
                 missing[&sha]
                     .iter()
-                    .filter_map(|p| m.get(p).cloned())
+                    .filter_map(|p| m.get(p).and_then(|v| v.clone()))
                     .collect()
             };
             let ctx = TransformCtx {
@@ -307,8 +311,8 @@ async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMa
         };
         in_flight -= 1;
 
-        let target_sha = match result {
-            Ok(sha) => sha,
+        let target_sha_opt = match result {
+            Ok(opt) => opt,
             Err(e) => {
                 // Drain remaining in-flight workers before returning the error
                 // so their tokio tasks don't outlive this function.
@@ -319,7 +323,9 @@ async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMa
                 return Err(e);
             }
         };
-        shared.lock().unwrap().insert(sha.clone(), target_sha);
+        // Insert `Some(sha)` for mapped commits and `None` for dropped roots.
+        // Both states unblock dependent commits in the same way.
+        shared.lock().unwrap().insert(sha.clone(), target_sha_opt);
 
         if let Some(child_shas) = children.get(&sha) {
             for child in child_shas {

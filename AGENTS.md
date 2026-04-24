@@ -104,7 +104,7 @@ artifacts:
 | `rule.output` | string \| list \| map | entire worktree | Output mode: files/dirs to copy into the target commit. Each entry is `"src"` or `"src:dst"`; source paths may be absolute. An explicit empty list (`[]`) means copy nothing. Mutually exclusive with `targetEnv`. |
 | `rule.targetEnv` | string | — | Build-your-own-target mode: name of the env var seeded with a fresh empty directory that `command` should populate. Mutually exclusive with `output`. |
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous target commit. Never applies to merge commits. |
-| `skip-commit-messages` | list of strings | `[]` | Substring match against source commit message; matched commits are mapped to their first parent's target commit. Never applies to merge commits. |
+| `skip-commit-messages` | list of strings | `[]` | Substring match against source commit message; matched commits map to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), the commit is dropped and no mapping ref is written. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command` |
 | `branches` | list of strings | `[]` | Branch whitelist for automatic syncs (pre-push hook, CI). Has no effect on manual `git xf sync`. |
 
@@ -116,7 +116,7 @@ Both skip policies are suppressed for merge commits — a merge commit always pr
 
 - `error`: abort and report (exit non-zero).
 - `empty-commit`: create a target commit with the error in the message; content carries over from parent.
-- `skip`: map the failing commit to the same target commit as its parent, eliding it from target history.
+- `skip`: on command failure, map the commit to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), drop the commit and write no mapping ref. For merge commits, `skip` is suppressed to preserve topology (falls back to `empty-commit`).
 
 ---
 
