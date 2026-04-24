@@ -989,7 +989,7 @@ fn test_rule_byot() {
     assert_eq!(content.trim(), "byot-payload");
 }
 
-/// Using both `output` and `targetEnv` in the same rule is a config error.
+/// Using both `output` (non-empty) and `targetEnv` in the same rule is a config error.
 #[test]
 fn test_rule_output_and_byot_conflict() {
     let config = indoc(
@@ -1012,6 +1012,36 @@ fn test_rule_output_and_byot_conflict() {
     assert!(
         !out.status.success(),
         "sync should have failed with a config error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("targetEnv") || stderr.contains("output"),
+        "error message should mention the conflicting fields: {stderr}"
+    );
+}
+
+/// An explicit empty `output: []` combined with `targetEnv` is also a config error.
+#[test]
+fn test_rule_output_empty_list_and_byot_conflict() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+             output: []
+             targetEnv: XF_TARGET
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("a.txt", "a")]);
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .arg("sync")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "sync should have failed with a config error for output: [] + targetEnv"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

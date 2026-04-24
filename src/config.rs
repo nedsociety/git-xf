@@ -17,10 +17,6 @@ impl OutputSpec {
     pub fn paths(&self) -> &[(String, String)] {
         &self.0
     }
-
-    pub fn is_whole_worktree(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 impl<'de> Deserialize<'de> for OutputSpec {
@@ -98,8 +94,9 @@ pub struct RuleConfig {
     /// Output-mode: paths to copy from source worktree into the target commit.
     /// Absent or null means copy the entire source worktree.
     /// Each entry: `"src[:dst]"`, a list of such strings, or a `{src: dst}` map.
+    /// Mutually exclusive with `target_env` — even `output: []` is rejected.
     #[serde(default)]
-    pub output: OutputSpec,
+    pub output: Option<OutputSpec>,
     /// Build-your-own-target mode: name of the env var seeded with a fresh
     /// empty directory that `command` should populate. Mutually exclusive with `output`.
     #[serde(rename = "targetEnv")]
@@ -166,7 +163,7 @@ pub fn load(repo_root: &Path) -> Result<Config> {
                 name
             );
         }
-        if !cfg.rule.output.is_whole_worktree() && cfg.rule.target_env.is_some() {
+        if cfg.rule.output.is_some() && cfg.rule.target_env.is_some() {
             bail!(
                 "transformation {:?}: 'output' and 'targetEnv' cannot both be set",
                 name

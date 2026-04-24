@@ -110,8 +110,8 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
 
     // Populate the target worktree.
     match byot_dir.as_deref() {
-        Some(byot) => copy_recursive(byot, &tgt_wt, false)?,
-        None => copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?,
+        Some(byot) => copy_recursive(byot, &tgt_wt)?,
+        None => copy_output(&src_wt, &tgt_wt, ctx.config.rule.output.as_ref())?,
     }
     git::git_add_all(&tgt_wt)?;
     let tree = git::write_tree(&tgt_wt)?;
@@ -269,14 +269,15 @@ fn run_rule(
 
 /// Copies `output` paths from source worktree to target worktree.
 ///
-/// Each entry is a `(src, dst)` pair; `src` is relative to `src_wt` unless
-/// absolute, `dst` is always relative to `tgt_wt`.  An empty `OutputSpec`
-/// (field absent or null) copies the entire source worktree.
-fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &OutputSpec) -> Result<()> {
-    if output.is_whole_worktree() {
-        return copy_recursive(src_wt, tgt_wt, true);
-    }
-    for (src_rel, dst_rel) in output.paths() {
+/// `None` copies the entire source worktree.  `Some(spec)` copies the declared
+/// `(src, dst)` pairs; `src` is relative to `src_wt` unless absolute, `dst` is
+/// always relative to `tgt_wt`.
+fn copy_output(src_wt: &Path, tgt_wt: &Path, output: Option<&OutputSpec>) -> Result<()> {
+    let spec = match output {
+        None => return copy_recursive(src_wt, tgt_wt),
+        Some(s) => s,
+    };
+    for (src_rel, dst_rel) in spec.paths() {
         let src = if Path::new(src_rel).is_absolute() {
             PathBuf::from(src_rel)
         } else {
@@ -300,7 +301,7 @@ fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &OutputSpec) -> Result<()> 
             }
             recreate_symlink(&src, &dst)?;
         } else if meta.is_dir() {
-            copy_recursive(&src, &dst, false)?;
+            copy_recursive(&src, &dst)?;
         } else {
             if let Some(p) = dst.parent() {
                 std::fs::create_dir_all(p)?;
@@ -311,14 +312,14 @@ fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &OutputSpec) -> Result<()> 
     Ok(())
 }
 
-/// Recursively copies `src` into `tgt`, always skipping `.git` entries so
-/// neither source worktree metadata nor nested git repos bleed through.
-fn copy_recursive(src: &Path, tgt: &Path, skip_git: bool) -> Result<()> {
+/// Recursively copies `src` into `tgt`, always skipping `.git` so neither
+/// source worktree metadata nor nested git repos bleed into the target commit.
+fn copy_recursive(src: &Path, tgt: &Path) -> Result<()> {
     std::fs::create_dir_all(tgt)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let name = entry.file_name();
-        if skip_git && name == ".git" {
+        if name == ".git" {
             continue;
         }
         let src_path = entry.path();
@@ -327,7 +328,7 @@ fn copy_recursive(src: &Path, tgt: &Path, skip_git: bool) -> Result<()> {
         if meta.file_type().is_symlink() {
             recreate_symlink(&src_path, &tgt_path)?;
         } else if meta.is_dir() {
-            copy_recursive(&src_path, &tgt_path, false)?;
+            copy_recursive(&src_path, &tgt_path)?;
         } else {
             std::fs::copy(&src_path, &tgt_path)?;
         }
