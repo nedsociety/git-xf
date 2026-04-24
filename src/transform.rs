@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use crate::cache::Cache;
-use crate::config::{ChangelessPolicy, IgnoreErrorPolicy, TransformConfig};
+use crate::config::{ChangelessPolicy, IgnoreErrorPolicy, OutputSpec, RuleConfig, TransformConfig};
 use crate::error::Error;
 use crate::git::{self, CommitInfo, CommitTreeArgs};
 
@@ -52,7 +52,18 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     // force=true because rule.command leaves modified/untracked files behind
     let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
 
-    match run_rule(&src_wt, &ctx.config.rule.command) {
+    // In BYOT mode, create an empty staging dir and pass its path via the env var.
+    let byot_dir: Option<PathBuf> = if ctx.config.rule.target_env.is_some() {
+        let p = byot_path(&ctx.git_dir, &ctx.name, &ctx.source_sha);
+        let _ = std::fs::remove_dir_all(&p); // remove stale dir from a previous crash
+        std::fs::create_dir_all(&p)?;
+        Some(p)
+    } else {
+        None
+    };
+    let _byot_guard = byot_dir.as_ref().map(|p| CleanupDir(p.clone()));
+
+    match run_rule(&src_wt, &ctx.config.rule, byot_dir.as_deref()) {
         Ok(()) => {}
         Err(stderr) => match ctx.config.ignore_error {
             IgnoreErrorPolicy::Error => {
@@ -97,7 +108,11 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     git::worktree_add_orphan(&ctx.cache.path, &tgt_wt, &branch)?;
     let _tgt_guard = WorktreeGuard::new(&ctx.cache.path, &tgt_wt, true).with_orphan_branch(branch);
 
-    copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?;
+    // Populate the target worktree.
+    match byot_dir.as_deref() {
+        Some(byot) => copy_recursive(byot, &tgt_wt, false)?,
+        None => copy_output(&src_wt, &tgt_wt, &ctx.config.rule.output)?,
+    }
     git::git_add_all(&tgt_wt)?;
     let tree = git::write_tree(&tgt_wt)?;
 
@@ -116,7 +131,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<String> {
     create_and_record(ctx, &tree, &msg, &info)
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Records source→parent mapping and returns the parent target SHA.
 fn skip_to_parent(ctx: &TransformCtx) -> Result<String> {
@@ -203,68 +218,101 @@ fn wt_path(git_dir: &Path, name: &str, sha: &str, kind: &str) -> PathBuf {
         .join(format!("{name}-{kind}-{sha}"))
 }
 
-/// Runs `rule.command` in `wt_path` via `sh -c`. Returns `Err(combined_output)`
-/// on non-zero exit, combining stdout and stderr so build-tool diagnostics
-/// written to stdout are not silently lost.
-fn run_rule(wt_path: &Path, command: &str) -> std::result::Result<(), String> {
-    Command::new("sh")
-        .args(["-c", command])
-        .current_dir(wt_path)
-        .output()
-        .map_err(|e| e.to_string())
-        .and_then(|out| {
-            if out.status.success() {
-                Ok(())
-            } else {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                let combined = match (stdout.trim_end(), stderr.trim_end()) {
-                    ("", s) => s.to_string(),
-                    (o, "") => o.to_string(),
-                    (o, s) => format!("{o}\n{s}"),
-                };
-                Err(combined)
-            }
-        })
+fn byot_path(git_dir: &Path, name: &str, sha: &str) -> PathBuf {
+    git_dir
+        .join("git-xf")
+        .join("tmp")
+        .join(format!("{name}-byot-{sha}"))
+}
+
+/// Runs `rule.command` via the configured shell.
+///
+/// - `shell == "sh"`: `sh -c $command`
+/// - anything else: `/usr/bin/env $shell -c $command`
+///
+/// In BYOT mode, `byot_dir` is passed as the value of `rule.target_env`.
+///
+/// Returns `Err(combined stdout+stderr)` on non-zero exit.
+fn run_rule(
+    wt_path: &Path,
+    rule: &RuleConfig,
+    byot_dir: Option<&Path>,
+) -> std::result::Result<(), String> {
+    let mut cmd = if rule.shell == "sh" {
+        let mut c = Command::new("sh");
+        c.args(["-c", &rule.command]);
+        c
+    } else {
+        let mut c = Command::new("/usr/bin/env");
+        c.args([rule.shell.as_str(), "-c", &rule.command]);
+        c
+    };
+    cmd.current_dir(wt_path);
+    if let (Some(env_name), Some(dir)) = (&rule.target_env, byot_dir) {
+        cmd.env(env_name, dir);
+    }
+    cmd.output().map_err(|e| e.to_string()).and_then(|out| {
+        if out.status.success() {
+            Ok(())
+        } else {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let combined = match (stdout.trim_end(), stderr.trim_end()) {
+                ("", s) => s.to_string(),
+                (o, "") => o.to_string(),
+                (o, s) => format!("{o}\n{s}"),
+            };
+            Err(combined)
+        }
+    })
 }
 
 /// Copies `output` paths from source worktree to target worktree.
-/// If `output` is empty, copies the entire source worktree (excluding `.git`).
-fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &[String]) -> Result<()> {
-    if output.is_empty() {
+///
+/// Each entry is a `(src, dst)` pair; `src` is relative to `src_wt` unless
+/// absolute, `dst` is always relative to `tgt_wt`.  An empty `OutputSpec`
+/// (field absent or null) copies the entire source worktree.
+fn copy_output(src_wt: &Path, tgt_wt: &Path, output: &OutputSpec) -> Result<()> {
+    if output.is_whole_worktree() {
         return copy_recursive(src_wt, tgt_wt, true);
     }
-    for rel in output {
-        let src = src_wt.join(rel);
-        let tgt = tgt_wt.join(rel);
+    for (src_rel, dst_rel) in output.paths() {
+        let src = if Path::new(src_rel).is_absolute() {
+            PathBuf::from(src_rel)
+        } else {
+            src_wt.join(src_rel)
+        };
+        let dst = tgt_wt.join(dst_rel);
         let meta = match std::fs::symlink_metadata(&src) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 eprintln!(
-                    "warning: declared output path '{}' not found in source worktree; \
+                    "warning: output path '{}' not found; \
                      it will be absent from the target commit",
-                    rel,
+                    src.display(),
                 );
                 continue;
             }
             other => other?,
         };
         if meta.file_type().is_symlink() {
-            if let Some(p) = tgt.parent() {
+            if let Some(p) = dst.parent() {
                 std::fs::create_dir_all(p)?;
             }
-            recreate_symlink(&src, &tgt)?;
+            recreate_symlink(&src, &dst)?;
         } else if meta.is_dir() {
-            copy_recursive(&src, &tgt, false)?;
+            copy_recursive(&src, &dst, false)?;
         } else {
-            if let Some(p) = tgt.parent() {
+            if let Some(p) = dst.parent() {
                 std::fs::create_dir_all(p)?;
             }
-            std::fs::copy(&src, &tgt)?;
+            std::fs::copy(&src, &dst)?;
         }
     }
     Ok(())
 }
 
+/// Recursively copies `src` into `tgt`, always skipping `.git` entries so
+/// neither source worktree metadata nor nested git repos bleed through.
 fn copy_recursive(src: &Path, tgt: &Path, skip_git: bool) -> Result<()> {
     std::fs::create_dir_all(tgt)?;
     for entry in std::fs::read_dir(src)? {
@@ -303,7 +351,16 @@ fn recreate_symlink(src: &Path, tgt: &Path) -> Result<()> {
     Ok(())
 }
 
-// ── worktree cleanup guard ────────────────────────────────────────────────
+// ── cleanup guards ────────────────────────────────────────────────────────────
+
+/// Removes a plain directory on drop (used for the BYOT staging dir).
+struct CleanupDir(PathBuf);
+
+impl Drop for CleanupDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 struct WorktreeGuard {
     repo: PathBuf,
