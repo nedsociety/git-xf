@@ -1169,6 +1169,287 @@ fn test_rule_byot_git_entry_not_copied() {
     assert_eq!(content.trim(), "data");
 }
 
+// ── --rule: per-commit rule reading ──────────────────────────────────────────
+//
+// Key setup pattern for these tests:
+//   1. env.commit() always stages the on-disk .git-xf.yaml via `git add .`.
+//   2. To test per-commit vs HEAD rule differences:
+//      - Include the desired per-commit .git-xf.yaml in the commit files list,
+//        then re-write the HEAD config to disk (without committing) before sync.
+//   3. To test "missing .git-xf.yaml" in a commit:
+//      - After the base commit, use `git rm .git-xf.yaml` + commit to create a
+//        commit whose tree has no config, then re-write the config to disk.
+//   4. For a root commit without .git-xf.yaml, use commit_orphan().
+
+/// `--rule=head` always uses HEAD's on-disk rule; per-commit .git-xf.yaml
+/// differences are ignored.
+#[test]
+fn test_rule_source_head() {
+    // HEAD (disk) rule: output: [] — copies nothing.
+    // Per-commit rule: output: [a.txt] — would copy a.txt.
+    // With --rule=head, a.txt should NOT appear in the target.
+    let head_config =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n    output: []\n";
+    let env = Env::new(head_config);
+
+    let per_commit =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n    output:\n      - a.txt\n";
+    env.commit("first", &[(".git-xf.yaml", per_commit), ("a.txt", "hello")]);
+
+    // Restore HEAD config on disk without committing — config::load will see output: [].
+    fs::write(env.source.join(".git-xf.yaml"), head_config).unwrap();
+    env.sync(&["--rule=head"]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let files = env.target_tree_files(&tip);
+    assert!(
+        !files.contains(&"a.txt".to_string()),
+        "--rule=head should use HEAD's empty output, not the per-commit rule: {files:?}"
+    );
+}
+
+/// `--rule=commit` uses each source commit's own rule, ignoring HEAD's.
+#[test]
+fn test_rule_source_commit_uses_per_commit_rule() {
+    // HEAD (disk) rule: output: [] — copies nothing.
+    // Per-commit rule: output: [a.txt].
+    // With --rule=commit, a.txt SHOULD appear in the target.
+    let head_config =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n    output: []\n";
+    let env = Env::new(head_config);
+
+    let per_commit =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n    output:\n      - a.txt\n";
+    let sha1 = env.commit("first", &[(".git-xf.yaml", per_commit), ("a.txt", "hello")]);
+
+    fs::write(env.source.join(".git-xf.yaml"), head_config).unwrap();
+    env.sync(&["--rule=commit"]);
+
+    let target1 = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha1}"))
+        .unwrap();
+    let files = env.target_tree_files(&target1);
+    assert!(
+        files.contains(&"a.txt".to_string()),
+        "--rule=commit should use per-commit rule (output: [a.txt]): {files:?}"
+    );
+}
+
+/// No `--rule` flag defaults to `--rule=commit`.
+#[test]
+fn test_rule_source_commit_is_default() {
+    let head_config =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n    output: []\n";
+    let env = Env::new(head_config);
+
+    let per_commit =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n    output:\n      - a.txt\n";
+    let sha1 = env.commit("first", &[(".git-xf.yaml", per_commit), ("a.txt", "hi")]);
+
+    fs::write(env.source.join(".git-xf.yaml"), head_config).unwrap();
+    env.sync(&[]); // no --rule flag → default is commit
+
+    let target1 = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha1}"))
+        .unwrap();
+    let files = env.target_tree_files(&target1);
+    assert!(
+        files.contains(&"a.txt".to_string()),
+        "default mode should be --rule=commit: {files:?}"
+    );
+}
+
+/// `missing: error` (the default) — sync fails when the per-commit .git-xf.yaml
+/// is absent from a commit's tree.
+#[test]
+fn test_rule_source_commit_missing_file_error() {
+    let config = "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n"; // missing: error by default
+    let env = Env::new(config);
+
+    // Base commit: includes .git-xf.yaml (unavoidable with git add .).
+    env.commit("base", &[("a.txt", "a")]);
+
+    // Remove .git-xf.yaml from git so the next commit has no config.
+    git(&env.source, &["rm", ".git-xf.yaml"]);
+    git(&env.source, &["commit", "-m", "remove config"]);
+    let no_config_sha = git_read(&env.source, &["rev-parse", "HEAD"]);
+
+    // Re-write config to disk so config::load still works.
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .args(["sync", "--rule=commit"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "sync should fail with missing: error (default)"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("missing rule") || stderr.contains("missing-rule"),
+        "error should mention missing rule: {stderr}"
+    );
+    assert!(
+        !env.target_ref_exists(&format!("refs/git-xf/test/{no_config_sha}")),
+        "failed commit should have no mapping ref"
+    );
+}
+
+/// `missing: error` — sync fails when the transformation block is absent from
+/// the per-commit .git-xf.yaml.
+#[test]
+fn test_rule_source_commit_missing_block_error() {
+    let config = "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n";
+    let env = Env::new(config);
+
+    env.commit("base", &[("a.txt", "a")]);
+
+    // Commit a .git-xf.yaml with a DIFFERENT transformation name — no 'test' block.
+    let wrong = "other:\n  target: ../target.git\n  rule:\n    command: 'true'\n";
+    env.commit("wrong block", &[(".git-xf.yaml", wrong), ("b.txt", "b")]);
+
+    // Restore correct config on disk.
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .args(["sync", "--rule=commit"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "sync should fail when transformation block is absent from per-commit config"
+    );
+}
+
+/// `missing: skip` — a commit without a per-commit rule is mapped to its
+/// first mapped direct parent.
+#[test]
+fn test_rule_source_commit_missing_skip() {
+    let config = "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n  missing: skip\n";
+    let env = Env::new(config);
+
+    let sha_base = env.commit("base", &[("a.txt", "a")]);
+
+    git(&env.source, &["rm", ".git-xf.yaml"]);
+    git(&env.source, &["commit", "-m", "no config"]);
+    let sha_skip = git_read(&env.source, &["rev-parse", "HEAD"]);
+
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+    env.sync(&["--rule=commit"]);
+
+    let base_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_base}"))
+        .unwrap();
+    let skip_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_skip}"))
+        .unwrap();
+    assert_eq!(
+        base_target, skip_target,
+        "missing:skip commit should map to parent's target SHA"
+    );
+    assert_eq!(env.target_commit_count("refs/heads/main"), 1);
+}
+
+/// `missing: empty-commit` — creates a target commit with a `[git-xf missing-rule]`
+/// marker in the message.
+#[test]
+fn test_rule_source_commit_missing_empty_commit() {
+    let config =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n  missing: empty-commit\n";
+    let env = Env::new(config);
+
+    env.commit("base", &[("a.txt", "a")]);
+
+    git(&env.source, &["rm", ".git-xf.yaml"]);
+    git(&env.source, &["commit", "-m", "no config"]);
+    let sha_no_config = git_read(&env.source, &["rev-parse", "HEAD"]);
+
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+    env.sync(&["--rule=commit"]);
+
+    let target_sha = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_no_config}"))
+        .expect("missing:empty-commit should produce a mapping ref");
+    let msg = env.target_commit_message(&target_sha);
+    assert!(
+        msg.contains("[git-xf missing-rule]"),
+        "commit message should contain [git-xf missing-rule] marker: {msg}"
+    );
+}
+
+/// `missing: skip` on a root commit (orphan, no parents) drops the commit —
+/// same root-drop semantics as `ignore-error: skip`.
+#[test]
+fn test_rule_source_commit_missing_skip_root_dropped() {
+    let config = "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n  missing: skip\n";
+    let env = Env::new(config);
+
+    // Orphan root commit with no .git-xf.yaml in its tree.
+    let root_sha = env.commit_orphan("orphan", "root no config", &[("a.txt", "a")]);
+
+    // Restore config to disk after commit_orphan's git clean.
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+    env.sync(&["--rule=commit"]);
+
+    assert!(
+        !env.target_ref_exists(&format!("refs/git-xf/test/{root_sha}")),
+        "root commit dropped due to missing rule should have no mapping ref"
+    );
+    assert_eq!(env.target_commit_count("refs/heads/orphan"), 0);
+}
+
+/// A malformed per-commit .git-xf.yaml triggers the `missing` policy.
+#[test]
+fn test_rule_source_commit_parse_error() {
+    let config =
+        "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n  missing: empty-commit\n";
+    let env = Env::new(config);
+
+    env.commit("base", &[("a.txt", "a")]);
+
+    // Commit a malformed .git-xf.yaml (YAML parse error).
+    let bad_yaml = "{ invalid: [unclosed";
+    env.commit("bad yaml", &[(".git-xf.yaml", bad_yaml), ("b.txt", "b")]);
+    let sha_bad = git_read(&env.source, &["rev-parse", "HEAD"]);
+
+    // Restore valid config to disk.
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+    env.sync(&["--rule=commit"]);
+
+    let target_sha = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_bad}"))
+        .expect("parse error + missing:empty-commit should produce a mapping ref");
+    let msg = env.target_commit_message(&target_sha);
+    assert!(
+        msg.contains("[git-xf missing-rule]"),
+        "YAML parse error should produce [git-xf missing-rule] marker: {msg}"
+    );
+}
+
+/// `--rule=head` ignores the `missing` policy entirely — the per-commit config
+/// is never read, so a missing file does not trigger any policy.
+#[test]
+fn test_rule_source_head_ignores_missing_policy() {
+    let config = "test:\n  target: ../target.git\n  rule:\n    command: 'true'\n  missing: error\n";
+    let env = Env::new(config);
+
+    env.commit("base", &[("a.txt", "a")]);
+
+    git(&env.source, &["rm", ".git-xf.yaml"]);
+    git(&env.source, &["commit", "-m", "remove config"]);
+
+    // Re-write config to disk — needed for config::load.
+    fs::write(env.source.join(".git-xf.yaml"), config).unwrap();
+
+    // --rule=head should succeed even though the commit has no .git-xf.yaml,
+    // because the per-commit config is never consulted.
+    env.sync(&["--rule=head"]);
+    assert_eq!(env.target_commit_count("refs/heads/main"), 2);
+}
+
 // ── skip on root commit ───────────────────────────────────────────────────────
 
 /// `ignore-error: skip` on the very first (root) commit drops it entirely —
@@ -1286,7 +1567,7 @@ fn test_ignore_error_skip_merge_drops_failed_root_parent() {
     env.checkout("main");
     let merge_sha = env.merge_unrelated("side", "merge unrelated histories");
 
-    env.sync(&[]);
+    env.sync(&["--rule=head"]);
 
     // side root has no mapping (it was dropped).
     assert!(

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::config::Config;
+use crate::config::{Config, RuleSource};
 use crate::sync;
 
 const MARKER: &str = "# Installed by git-xf.";
@@ -82,7 +82,16 @@ pub async fn run(source_repo: &Path, git_dir: &Path, config: &Config, jobs: usiz
         // only touches this transformation.
         let single: Config =
             std::iter::once((name.to_string(), config.get(name).unwrap().clone())).collect();
-        sync::run(source_repo, git_dir, &single, &shas, false, jobs).await?;
+        sync::run(
+            source_repo,
+            git_dir,
+            &single,
+            &shas,
+            false,
+            jobs,
+            RuleSource::Commit,
+        )
+        .await?;
     }
 
     Ok(())

@@ -5,7 +5,10 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::cache::Cache;
-use crate::config::{ChangelessPolicy, IgnoreErrorPolicy, OutputSpec, RuleConfig, TransformConfig};
+use crate::config::{
+    ChangelessPolicy, IgnoreErrorPolicy, MissingPolicy, OutputSpec, RuleConfig, RuleSource,
+    TransformConfig,
+};
 use crate::error::Error;
 use crate::git::{self, CommitInfo, CommitTreeArgs};
 
@@ -21,12 +24,14 @@ pub struct TransformCtx {
     pub source_sha: String,
     /// Local cache for this transformation's target repository.
     pub cache: Arc<Cache>,
-    /// Transformation configuration.
+    /// Transformation configuration (from HEAD).
     pub config: Arc<TransformConfig>,
     /// Transformation name.
     pub name: String,
     /// Resolved target-repo parent SHAs, in the same order as the source parents.
     pub target_parents: Vec<String>,
+    /// Whether to read the rule from each commit or always use HEAD's rule.
+    pub rule_source: RuleSource,
 }
 
 /// Transforms one source commit and returns the resulting target SHA.
@@ -56,8 +61,19 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     // force=true because rule.command leaves modified/untracked files behind
     let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
 
+    // Resolve the effective rule: either HEAD's rule or the per-commit rule.
+    let per_commit_rule: Option<RuleConfig> = if ctx.rule_source == RuleSource::Commit {
+        match read_commit_rule(&src_wt, &ctx.name) {
+            Ok(rule) => Some(rule),
+            Err(reason) => return apply_missing_policy(ctx, &info, &reason),
+        }
+    } else {
+        None
+    };
+    let effective_rule: &RuleConfig = per_commit_rule.as_ref().unwrap_or(&ctx.config.rule);
+
     // In BYOT mode, create an empty staging dir and pass its path via the env var.
-    let byot_dir: Option<PathBuf> = if ctx.config.rule.target_env.is_some() {
+    let byot_dir: Option<PathBuf> = if effective_rule.target_env.is_some() {
         let p = byot_path(&ctx.git_dir, &ctx.name, &ctx.source_sha);
         let _ = std::fs::remove_dir_all(&p); // remove stale dir from a previous crash
         std::fs::create_dir_all(&p)?;
@@ -67,7 +83,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     };
     let _byot_guard = byot_dir.as_ref().map(|p| CleanupDir(p.clone()));
 
-    match run_rule(&src_wt, &ctx.config.rule, byot_dir.as_deref()) {
+    match run_rule(&src_wt, effective_rule, byot_dir.as_deref()) {
         Ok(()) => {}
         Err(stderr) => match ctx.config.ignore_error {
             IgnoreErrorPolicy::Error => {
@@ -115,7 +131,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     // Populate the target worktree.
     match byot_dir.as_deref() {
         Some(byot) => copy_recursive(byot, &tgt_wt)?,
-        None => copy_output(&src_wt, &tgt_wt, ctx.config.rule.output.as_ref())?,
+        None => copy_output(&src_wt, &tgt_wt, effective_rule.output.as_ref())?,
     }
     git::git_add_all(&tgt_wt)?;
     let tree = git::write_tree(&tgt_wt)?;
@@ -189,6 +205,51 @@ fn create_and_record(
     })?;
     ctx.cache.set_mapping(&ctx.source_sha, &target_sha)?;
     Ok(target_sha)
+}
+
+/// Reads and parses the per-commit rule from `<src_wt>/.git-xf.yaml`.
+///
+/// Returns `Ok(rule)` on success, `Err(reason)` when the rule is missing or
+/// unparseable (reason is a human-readable string for the commit message).
+fn read_commit_rule(src_wt: &Path, name: &str) -> std::result::Result<RuleConfig, String> {
+    let path = src_wt.join(".git-xf.yaml");
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("no .git-xf.yaml in this commit".to_string());
+        }
+        Err(e) => return Err(format!("error reading .git-xf.yaml: {e}")),
+    };
+    crate::config::parse_rule(&yaml, name).map_err(|e| e.to_string())
+}
+
+/// Applies the `missing` policy when the per-commit rule cannot be read.
+fn apply_missing_policy(
+    ctx: &TransformCtx,
+    info: &CommitInfo,
+    reason: &str,
+) -> Result<Option<String>> {
+    match ctx.config.missing {
+        MissingPolicy::Error => Err(Error::MissingRule {
+            name: ctx.name.clone(),
+            sha: ctx.source_sha.clone(),
+            reason: reason.to_string(),
+        }
+        .into()),
+        MissingPolicy::EmptyCommit => {
+            let tree = parent_tree_sha(ctx)?;
+            let msg = missing_rule_message(&ctx.name, &ctx.source_sha, reason);
+            create_and_record(ctx, &tree, &msg, info).map(Some)
+        }
+        MissingPolicy::Skip => skip_to_parent(ctx),
+    }
+}
+
+fn missing_rule_message(name: &str, source_sha: &str, reason: &str) -> String {
+    format!(
+        "[git-xf missing-rule] {} on {}\n\n{}\n\ngit-xf-source: {}\ngit-xf-transform: {}",
+        name, source_sha, reason, source_sha, name,
+    )
 }
 
 fn normal_message(original: &str, source_sha: &str, name: &str) -> String {

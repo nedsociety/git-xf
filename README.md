@@ -103,6 +103,7 @@ artifacts:
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring-match against the source commit message; matched commits map to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), the commit is dropped and no mapping ref is written. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command`. For `skip`: map the commit to the first mapped direct parent; if no direct parent is mapped, drop the commit and write no mapping ref. For merge commits, `skip` is suppressed to preserve topology (falls back to `empty-commit`). |
+| `missing` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a source commit whose `.git-xf.yaml` is missing or whose `rule` block is unparseable (only relevant with `--rule=commit`). Same values and semantics as `ignore-error`. |
 | `branches` | list of strings | `[]` | Branch whitelist for automatic syncs (hook / CI). Has no effect on manual `git xf sync`. |
 
 ### `rule.output` formats
@@ -131,12 +132,15 @@ output:
 
 ## Commands
 
-### `git xf sync [--dry-run] [--jobs <n>] [<REF>...]`
+### `git xf sync [--dry-run] [--jobs <n>] [--rule <head|commit>] [<REF>...]`
 
 Transforms all commits reachable from each REF (default: `HEAD`) that have not yet been mapped, then performs a single push to each target.
 
 - `--dry-run` — print what would be transformed without writing anything.
 - `--jobs <n>` — max parallel workers (default: logical CPU count).
+- `--rule <head|commit>` — where to read the `rule` block from (default: `commit`):
+  - `head`: use the rule from the current HEAD's `.git-xf.yaml` for every commit.
+  - `commit`: read the `rule` block from each source commit's own `.git-xf.yaml`; apply the `missing` policy if absent or unparseable.
 
 After the sync, every `refs/heads/*` and `refs/tags/*` in the source whose tip commit has a mapping is mirrored to the target.
 
