@@ -210,10 +210,10 @@ Per commit:
 
 8. **Record mapping**: `git -C .git/git-xf/<name>.git update-ref "refs/git-xf/<name>/<source-sha>" "$COMMIT"`
 
-8. **Update branch tip** (once per branch, after all commits in the batch):
+9. **Update branch tip** (once per branch, after all commits in the batch):
    `git -C .git/git-xf/<name>.git update-ref refs/heads/<branch> <tip-sha>`
 
-9. **Clean up**:
+10. **Clean up**:
    ```
    git -C .git/git-xf/<name>.git worktree remove --force <tgt-wt-path>
    git worktree remove <src-wt-path>

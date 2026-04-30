@@ -172,8 +172,7 @@ fn validate_name(name: &str) -> bool {
 
 /// Parses a `.git-xf.yaml` string and extracts the `rule` block for `name`.
 ///
-/// Returns `Ok(None)` if the file is valid YAML but the transformation block is
-/// absent (including an empty/null document). Returns `Err` on YAML parse errors
+/// Returns `Err` if the YAML is malformed, if the transformation block is absent,
 /// or if the `rule` block itself cannot be deserialized.
 pub fn parse_rule(yaml: &str, name: &str) -> Result<RuleConfig> {
     let doc: serde_yaml::Value =
