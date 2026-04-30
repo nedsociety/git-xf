@@ -74,6 +74,19 @@ fn default_shell() -> String {
     "sh".to_string()
 }
 
+// ── RuleSource ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum RuleSource {
+    /// Always use the rule from HEAD's .git-xf.yaml.
+    Head,
+    /// Read the rule from each source commit's .git-xf.yaml.
+    /// If missing or unparseable, apply the `missing` policy.
+    #[default]
+    Commit,
+}
+
 // ── Rule config ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,6 +128,18 @@ pub enum IgnoreErrorPolicy {
     Skip,
 }
 
+/// What to do in `--rule=commit` mode when the per-commit rule is missing
+/// (`.git-xf.yaml` absent, transformation block absent, or YAML parse error).
+/// Has no effect in `--rule=head` mode.
+#[derive(Debug, Deserialize, Default, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum MissingPolicy {
+    #[default]
+    Error,
+    EmptyCommit,
+    Skip,
+}
+
 // ── TransformConfig ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,6 +154,8 @@ pub struct TransformConfig {
     #[serde(default)]
     pub ignore_error: IgnoreErrorPolicy,
     #[serde(default)]
+    pub missing: MissingPolicy,
+    #[serde(default)]
     pub branches: Vec<String>,
 }
 
@@ -141,6 +168,33 @@ fn validate_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Parses a `.git-xf.yaml` string and extracts the `rule` block for `name`.
+///
+/// Returns `Err` if the YAML is malformed, if the transformation block is absent,
+/// or if the `rule` block itself cannot be deserialized.
+pub fn parse_rule(yaml: &str, name: &str) -> Result<RuleConfig> {
+    let doc: serde_yaml::Value =
+        serde_yaml::from_str(yaml).context("failed to parse .git-xf.yaml")?;
+
+    let entry = doc
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("transformation '{name}' not found in .git-xf.yaml"))?;
+
+    let rule_value = entry
+        .get("rule")
+        .cloned()
+        .unwrap_or(serde_yaml::Value::Null);
+
+    let rule: RuleConfig = serde_yaml::from_value(rule_value)
+        .with_context(|| format!("failed to parse rule block for transformation '{name}'"))?;
+
+    if rule.output.is_some() && rule.target_env.is_some() {
+        bail!("transformation '{name}': 'output' and 'targetEnv' cannot both be set");
+    }
+
+    Ok(rule)
 }
 
 pub fn load(repo_root: &Path) -> Result<Config> {

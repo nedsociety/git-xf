@@ -13,7 +13,7 @@ Typical use cases:
 ## Command-line interface
 
 ```
-git xf sync [--dry-run] [--jobs <n>] [<REF>...]
+git xf sync [--dry-run] [--jobs <n>] [--rule <head|commit>] [<REF>...]
 git xf init [--target <path>]
 git xf status [--branch <branch>]
 git xf hook install
@@ -34,6 +34,9 @@ Per named transformation in `.git-xf.yaml`:
 
 `--dry-run` prints what would be transformed without touching the cache or remote.
 `--jobs <n>` sets max parallel workers (default: logical CPU count).
+`--rule <head|commit>` controls which `.git-xf.yaml` is used to read the `rule` block (default: `commit`):
+- `head`: use the rule from HEAD's `.git-xf.yaml` for every commit (same rule across the whole sync).
+- `commit`: read the `rule` block from each source commit's own `.git-xf.yaml`. If the file is missing or the block is unparseable, apply the `missing` policy defined in the transformation config.
 
 ### `git xf status [--branch <branch>]`
 
@@ -106,6 +109,7 @@ artifacts:
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous target commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring match against source commit message; matched commits map to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), the commit is dropped and no mapping ref is written. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command` |
+| `missing` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a source commit whose `.git-xf.yaml` is missing or whose `rule` block is unparseable (only relevant when `--rule=commit`). `error` and `empty-commit` behave identically to `ignore-error`. `skip` maps to the first mapped direct parent (or drops if none), but unlike `ignore-error: skip` it does **not** fall back to `empty-commit` for merge commits — the merge commit is still collapsed to one parent, potentially breaking target graph topology. |
 | `branches` | list of strings | `[]` | Branch whitelist for automatic syncs (pre-push hook, CI). Has no effect on manual `git xf sync`. |
 
 ### Merge commit exception for `changeless` and `skip-commit-messages`
@@ -174,24 +178,26 @@ Per commit:
 
 1. **Source worktree**: `git worktree add <src-wt-path> <source-sha>`
 
-2. **Run rule**: execute `rule.command` in `<src-wt-path>`. On non-zero exit apply `ignore-error` policy.
+2. **Resolve rule**: when `--rule=commit`, read `<src-wt-path>/.git-xf.yaml` and extract the `rule` block for this transformation. If the file is absent or the block is unparseable, apply the `missing` policy (same semantics as `ignore-error`). When `--rule=head`, use the rule from the HEAD config unconditionally.
 
-3. **Orphaned target worktree** (starts with empty index — blank staging area in the cache's object store):
+3. **Run rule**: execute `rule.command` in `<src-wt-path>`. On non-zero exit apply `ignore-error` policy.
+
+4. **Orphaned target worktree** (starts with empty index — blank staging area in the cache's object store):
    ```
    git -C .git/git-xf/<name>.git worktree add --orphan -b xf-work-<source-sha> <tgt-wt-path>
    ```
 
-4. **Populate** the target worktree — two modes:
+5. **Populate** the target worktree — two modes:
    - **Output mode** (`targetEnv` absent): copy `rule.output` entries from `<src-wt-path>` to `<tgt-wt-path>`. Each entry is a `(src, dst)` pair; source paths may be absolute. If `output` is omitted/null, copy the entire source worktree excluding `.git`.
    - **Build-your-own-target mode** (`targetEnv` set): create a fresh empty temp directory, expose its path as `$(<targetEnv>)` in `rule.command`'s environment, then copy the temp directory's contents into `<tgt-wt-path>` after the command exits.
 
-5. **Snapshot**:
+6. **Snapshot**:
    ```
    git -C <tgt-wt-path> add <output-paths>
    TREE=$(git -C <tgt-wt-path> write-tree)
    ```
 
-6. **Create commit**: resolve each source parent SHA via `refs/git-xf/<name>/<parent-sha>` to get target parent SHAs. Root commits have no `-p`.
+7. **Create commit**: resolve each source parent SHA via `refs/git-xf/<name>/<parent-sha>` to get target parent SHAs. Root commits have no `-p`.
    ```
    COMMIT=$(git -C .git/git-xf/<name>.git commit-tree "$TREE" \
      -p <target-parent-1> [-p <target-parent-2> ...] \
@@ -202,12 +208,12 @@ Per commit:
    ```
    Pass `GIT_AUTHOR_NAME/EMAIL/DATE` and `GIT_COMMITTER_NAME/EMAIL/DATE` verbatim from source. `GIT_COMMITTER_DATE` must be set (not left as wall-clock time) — same source commit + same rule output must produce the same target SHA across runs.
 
-7. **Record mapping**: `git -C .git/git-xf/<name>.git update-ref "refs/git-xf/<name>/<source-sha>" "$COMMIT"`
+8. **Record mapping**: `git -C .git/git-xf/<name>.git update-ref "refs/git-xf/<name>/<source-sha>" "$COMMIT"`
 
-8. **Update branch tip** (once per branch, after all commits in the batch):
+9. **Update branch tip** (once per branch, after all commits in the batch):
    `git -C .git/git-xf/<name>.git update-ref refs/heads/<branch> <tip-sha>`
 
-9. **Clean up**:
+10. **Clean up**:
    ```
    git -C .git/git-xf/<name>.git worktree remove --force <tgt-wt-path>
    git worktree remove <src-wt-path>

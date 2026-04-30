@@ -14,6 +14,12 @@ pub enum Error {
         sha: String,
         stderr: String,
     },
+    #[error("transform '{name}' missing rule on {sha}: {reason}")]
+    MissingRule {
+        name: String,
+        sha: String,
+        reason: String,
+    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

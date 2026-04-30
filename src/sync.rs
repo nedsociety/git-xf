@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use tokio::sync::Semaphore;
 
 use crate::cache::Cache;
-use crate::config::{Config, TransformConfig};
+use crate::config::{Config, RuleSource, TransformConfig};
 use crate::git;
 use crate::transform::{transform_commit, TransformCtx};
 
@@ -17,6 +17,7 @@ pub async fn run(
     refs: &[String],
     dry_run: bool,
     jobs: usize,
+    rule_source: RuleSource,
 ) -> Result<()> {
     let effective_refs: Vec<String> = if refs.is_empty() {
         vec!["HEAD".to_string()]
@@ -36,6 +37,7 @@ pub async fn run(
             &effective_refs,
             dry_run,
             jobs,
+            rule_source,
         )
         .await
         .with_context(|| format!("transformation '{name}' failed"))?;
@@ -45,6 +47,7 @@ pub async fn run(
 
 // ── per-transformation sync ───────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn sync_one(
     source_repo: &Path,
     git_dir: &Path,
@@ -53,6 +56,7 @@ async fn sync_one(
     refs: &[String],
     dry_run: bool,
     jobs: usize,
+    rule_source: RuleSource,
 ) -> Result<()> {
     let cache = Arc::new(Cache::new(git_dir, name));
     cache.ensure_initialized(&cfg.target)?;
@@ -85,6 +89,7 @@ async fn sync_one(
                 config: Arc::new(cfg.clone()),
                 name: name.to_string(),
                 jobs,
+                rule_source,
             },
             &missing,
             init_mappings,
@@ -222,6 +227,7 @@ struct DispatchCtx {
     config: Arc<TransformConfig>,
     name: String,
     jobs: usize,
+    rule_source: RuleSource,
 }
 
 /// Transforms all commits in `missing` in parallel (bounded by `jobs`),
@@ -234,6 +240,7 @@ async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMa
         config,
         name,
         jobs,
+        rule_source,
     } = ctx;
     let mut in_degree: HashMap<String, usize> =
         missing.keys().map(|k| (k.clone(), 0usize)).collect();
@@ -288,6 +295,7 @@ async fn dispatch(ctx: DispatchCtx, missing: &MissingMap, init_mappings: KnownMa
                 config: config.clone(),
                 name: name.clone(),
                 target_parents,
+                rule_source,
             };
             let tx = done_tx.clone();
             tokio::spawn(async move {

@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+use crate::config::RuleSource;
+
 fn parse_jobs(s: &str) -> Result<usize, String> {
     let n: usize = s
         .parse()
@@ -27,6 +29,9 @@ pub enum Commands {
         /// Maximum parallel workers (default: logical CPU count)
         #[arg(long, short, value_parser = parse_jobs)]
         jobs: Option<usize>,
+        /// How to source the rule for each commit (default: commit)
+        #[arg(long, default_value = "commit")]
+        rule: RuleSource,
         /// Refs to sync (default: HEAD)
         refs: Vec<String>,
     },
