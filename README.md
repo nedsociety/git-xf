@@ -103,7 +103,7 @@ artifacts:
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring-match against the source commit message; matched commits map to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), the commit is dropped and no mapping ref is written. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command`. For `skip`: map the commit to the first mapped direct parent; if no direct parent is mapped, drop the commit and write no mapping ref. For merge commits, `skip` is suppressed to preserve topology (falls back to `empty-commit`). |
-| `missing` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a source commit whose `.git-xf.yaml` is missing or whose `rule` block is unparseable (only relevant with `--rule=commit`). Same values and semantics as `ignore-error`. |
+| `missing` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a source commit whose `.git-xf.yaml` is missing or whose `rule` block is unparseable (only relevant with `--rule=commit`). `error` and `empty-commit` behave like `ignore-error`. `skip` maps to the first mapped direct parent (or drops if none), but unlike `ignore-error: skip` it does not fall back to `empty-commit` for merge commits. |
 | `branches` | list of strings | `[]` | Branch whitelist for automatic syncs (hook / CI). Has no effect on manual `git xf sync`. |
 
 ### `rule.output` formats
