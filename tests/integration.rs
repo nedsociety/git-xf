@@ -1691,7 +1691,7 @@ fn test_depth_with_already_mapped() {
     );
 }
 
-/// `--depth=2 --all-branches` applies the depth limit per branch tip.
+/// `--depth=1 --all-branches` applies the depth limit per branch tip.
 #[test]
 fn test_depth_all_branches() {
     let env = Env::new(passthrough_config());

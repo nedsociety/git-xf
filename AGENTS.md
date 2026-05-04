@@ -13,7 +13,9 @@ Typical use cases:
 ## Command-line interface
 
 ```
-git xf sync [--dry-run] [--jobs <n>] [--rule <head|commit>] [<REF>...]
+git xf sync [--dry-run] [--jobs <n>] [--rule <head|commit>]
+            [--push-chunk <n|nB|nK|nM|nG>] [--depth <n>] [--all-branches]
+            [<REF>...]
 git xf init [--target <path>]
 git xf status [--branch <branch>]
 git xf hook install
@@ -26,17 +28,26 @@ git xf hook uninstall
 
 Per named transformation in `.git-xf.yaml`:
 
-1. Resolve each REF to a commit SHA.
-2. Check whether `refs/git-xf/<name>/<sha>` exists in the local cache. If missing, recurse into parent commits until the entire missing subgraph is identified.
+1. Resolve each REF to a commit SHA (or resolve all `refs/heads/*` with `--all-branches`).
+2. Check whether `refs/git-xf/<name>/<sha>` exists in the local cache. If missing, recurse into parent commits until the entire missing subgraph is identified. With `--depth <n>`, the BFS stops at distance ≥ n from the nearest tip; boundary commits become synthetic roots.
 3. Topologically sort the missing commits.
 4. Transform each missing commit (parallelizing across commits whose parents are all done — see Pipeline and Parallelism sections).
-5. After all commits are created locally, perform a single `git push` to origin.
+5. Push mapping refs to origin in chunks (controlled by `--push-chunk`). After all commits are transformed, push updated branch/tag refs in a final push.
 
 `--dry-run` prints what would be transformed without touching the cache or remote.
 `--jobs <n>` sets max parallel workers (default: logical CPU count).
 `--rule <head|commit>` controls which `.git-xf.yaml` is used to read the `rule` block (default: `commit`):
 - `head`: use the rule from HEAD's `.git-xf.yaml` for every commit (same rule across the whole sync).
 - `commit`: read the `rule` block from each source commit's own `.git-xf.yaml`. If the file is missing or the block is unparseable, apply the `missing` policy defined in the transformation config.
+
+`--push-chunk <limit>` controls how often mapping refs are pushed mid-sync (default: `50M`):
+- A plain number (e.g. `100`) pushes after every N commits.
+- A suffixed number (e.g. `50M`, `1G`) pushes when accumulated new loose-object bytes exceed the limit.
+- `0` disables intermediate pushes — a single mapping push at the end (before the branch/tag push).
+
+`--depth <n>` limits the BFS to commits at distance < n from any tip (must be ≥ 1). Commits at the boundary are not transformed; their children in the transformed graph become synthetic roots with no parents. Distance is determined by first-discovery BFS order, not the shortest path across all tips.
+
+`--all-branches` uses all `refs/heads/*` as sync tips instead of explicit REFs. Conflicts with explicit REF arguments.
 
 ### `git xf status [--branch <branch>]`
 
@@ -222,17 +233,29 @@ Per commit:
 
 ---
 
-## Single push at the end
+## Pushing to origin
 
-Git cannot push raw SHAs — refspecs require named source refs. Steps 7–8 provide them. After the full batch:
+Git cannot push raw SHAs — refspecs require named source refs. Steps 7–8 provide them.
+
+**Mapping-ref pushes** happen once per chunk (controlled by `--push-chunk`). Each chunk push includes only the mapping refs for commits completed in that chunk:
 
 ```
 git -C .git/git-xf/<name>.git push origin \
-  refs/heads/<branch>:refs/heads/<branch> \
   refs/git-xf/<name>/<sha1>:refs/git-xf/<name>/<sha1> \
   refs/git-xf/<name>/<sha2>:refs/git-xf/<name>/<sha2> \
   ...
 ```
+
+**Branch/tag push** happens once at the end, after all chunks are complete:
+
+```
+git -C .git/git-xf/<name>.git push origin \
+  refs/heads/<branch>:refs/heads/<branch> \
+  refs/tags/<tag>:refs/tags/<tag> \
+  ...
+```
+
+With `--push-chunk=0` (`ChunkLimit::None`), there is a single mapping-ref push followed by the branch/tag push — two pushes total per transformation.
 
 ---
 

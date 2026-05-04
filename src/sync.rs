@@ -318,6 +318,10 @@ type KnownMap = HashMap<String, Option<String>>;
 /// When `depth` is `Some(d)`, commits at BFS distance ≥ d are skipped entirely;
 /// their children get empty `target_parents` and become synthetic roots in the target.
 ///
+/// Distance is assigned on **first discovery** in BFS order (not the minimum
+/// graph distance across all tips). With multiple tips, a shared ancestor's
+/// distance is determined by whichever tip's BFS wave reaches it first.
+///
 /// Returns:
 /// - `missing`: source SHA → source parent SHAs (commits that need transforming)
 /// - `known`: source SHA → target SHA (commits already in the cache)
@@ -683,8 +687,13 @@ async fn dispatch_size_chunk(
         }
 
         if stop_spawning {
-            // Draining: all remaining completions go to spillover.
-            spillover_shas.push(sha);
+            if target_sha_opt.is_some() {
+                // Draining: mapped commit spills to the next round.
+                spillover_shas.push(sha);
+            } else {
+                // Dropped during drain: same treatment as a normal drop.
+                chunk_dropped_shas.push(sha);
+            }
         } else if let Some(ref target_sha) = target_sha_opt {
             let size = loose_objects_size_delta(&cache.path, target_sha, &counted_in_chunk)?;
             counted_in_chunk.push(target_sha.clone());

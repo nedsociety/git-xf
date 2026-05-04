@@ -132,15 +132,18 @@ output:
 
 ## Commands
 
-### `git xf sync [--dry-run] [--jobs <n>] [--rule <head|commit>] [<REF>...]`
+### `git xf sync [options] [<REF>...]`
 
-Transforms all commits reachable from each REF (default: `HEAD`) that have not yet been mapped, then performs a single push to each target.
+Transforms all commits reachable from each REF (default: `HEAD`) that have not yet been mapped, then pushes mapping refs and updated branch/tag refs to the target.
 
 - `--dry-run` — print what would be transformed without writing anything.
 - `--jobs <n>` — max parallel workers (default: logical CPU count).
 - `--rule <head|commit>` — where to read the `rule` block from (default: `commit`):
   - `head`: use the rule from the current HEAD's `.git-xf.yaml` for every commit.
   - `commit`: read the `rule` block from each source commit's own `.git-xf.yaml`; apply the `missing` policy if absent or unparseable.
+- `--push-chunk <n|nB|nK|nM|nG>` — push mapping refs incrementally after every N commits or N bytes of new loose objects (default: `50M`). Use `0` to push everything at the end.
+- `--depth <n>` — limit sync to commits within BFS distance `n` from the tips (≥ 1). Boundary commits become synthetic roots in the target.
+- `--all-branches` — use all `refs/heads/*` as tips instead of explicit REFs. Cannot be combined with explicit REF arguments.
 
 After the sync, every `refs/heads/*` and `refs/tags/*` in the source whose tip commit has a mapping is mirrored to the target.
 
@@ -204,7 +207,7 @@ For each source commit, `git xf sync`:
 3. Each transform: checks out the source commit in a temporary worktree → runs `rule.command` → stages the result into an orphaned target worktree → runs `write-tree` / `commit-tree` → records the mapping ref.
    - **Output mode** (`rule.output`): copies declared paths from the source worktree into the target worktree.
    - **BYOT mode** (`rule.targetEnv`): `command` receives a fresh empty directory and populates it directly; git-xf stages its contents.
-4. Performs a single `git push` with all new mapping refs and updated branch/tag refs.
+4. Pushes mapping refs to the target in chunks (see `--push-chunk`), then pushes updated branch/tag refs in a final push.
 
 `GIT_COMMITTER_DATE` is set to the source commit date so that the same input always produces the same target SHA, making syncs idempotent.
 
