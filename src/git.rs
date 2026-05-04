@@ -197,6 +197,28 @@ pub fn commit_tree_sha(repo: &Path, sha: &str) -> Result<String> {
     )
 }
 
+/// Returns the contents of `path` in `commit`, or `None` if the path does not
+/// exist in that commit. Non-zero exit is treated as absence; by the time this
+/// is called the commit SHA is already known-valid (commit_info succeeded).
+pub fn cat_file_blob(repo: &Path, sha: &str, path: &str) -> Result<Option<String>> {
+    let spec = format!("{sha}:{path}");
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "-p", &spec])
+        .output()
+        .map_err(|e| Error::Git {
+            repo: repo.display().to_string(),
+            message: e.to_string(),
+            stderr: String::new(),
+        })?;
+    if out.status.success() {
+        Ok(Some(String::from_utf8_lossy(&out.stdout).to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn clone_bare(target_url: &str, dest: &Path) -> Result<()> {
     run(
         Command::new("git")
