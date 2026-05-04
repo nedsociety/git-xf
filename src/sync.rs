@@ -11,6 +11,17 @@ use crate::config::{Config, RuleSource, TransformConfig};
 use crate::git;
 use crate::transform::{transform_commit, TransformCtx};
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Runs `git push` on a threadpool thread so it doesn't block the async executor.
+/// Network I/O during push can take seconds; holding a tokio thread for that
+/// would starve other in-flight async work.
+async fn blocking_push(repo: PathBuf, refspecs: Vec<String>) -> Result<()> {
+    tokio::task::spawn_blocking(move || git::push(&repo, &refspecs))
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("push worker panicked: {e}")))
+}
+
 // ── ChunkLimit ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
@@ -190,9 +201,7 @@ async fn sync_one(
                             format!("{r}:{r}")
                         })
                         .collect();
-                    if !refspecs.is_empty() {
-                        git::push(&cache.path, &refspecs)?;
-                    }
+                    blocking_push(cache.path.clone(), refspecs).await?;
 
                     current_known = post
                         .into_iter()
@@ -247,9 +256,7 @@ async fn sync_one(
                             format!("{r}:{r}")
                         })
                         .collect();
-                    if !refspecs.is_empty() {
-                        git::push(&cache.path, &refspecs)?;
-                    }
+                    blocking_push(cache.path.clone(), refspecs).await?;
 
                     pushed_target_shas
                         .extend(spillover_shas.iter().filter_map(|s| post.get(s).cloned()));
@@ -295,7 +302,7 @@ async fn sync_one(
             branch_refspecs.push(format!("{refname}:{refname}"));
         }
     }
-    git::push(&cache.path, &branch_refspecs)?;
+    blocking_push(cache.path.clone(), branch_refspecs).await?;
 
     if total_missing > 0 {
         eprintln!("[{name}] synced {} commit(s)", total_missing);
@@ -331,6 +338,11 @@ fn find_missing(
     tips: &[String],
     depth: Option<usize>,
 ) -> Result<(MissingMap, KnownMap)> {
+    // Fetch all uncached reachable commits and their parent SHAs in one
+    // subprocess, replacing the previous O(n) `git show` per-commit loop.
+    let cached_list: Vec<&str> = cached.keys().map(|s| s.as_str()).collect();
+    let all_parents = git::log_parents(source_repo, tips, &cached_list)?;
+
     let mut missing: HashMap<String, Vec<String>> = HashMap::new();
     let mut known: HashMap<String, Option<String>> = HashMap::new();
     let mut queue: VecDeque<(String, usize)> = VecDeque::new();
@@ -353,13 +365,24 @@ fn find_missing(
         if depth.is_some_and(|d| dist >= d) {
             continue;
         }
-        let info = git::commit_info(source_repo, &sha)?;
-        for parent in &info.parents {
+        // Parents come from the batch result; absent means a true git root commit.
+        let parents: Vec<String> = all_parents.get(&sha).cloned().unwrap_or_default();
+        for parent in &parents {
             if visited.insert(parent.clone()) {
                 queue.push_back((parent.clone(), dist + 1));
             }
         }
-        missing.insert(sha, info.parents);
+        missing.insert(sha, parents);
+    }
+
+    // Seed known with direct parents of missing commits that aren't themselves
+    // missing — either they're already cached (Some) or depth-cut / git roots (None).
+    for parents in missing.values() {
+        for parent in parents {
+            if !missing.contains_key(parent) && !known.contains_key(parent) {
+                known.insert(parent.clone(), cached.get(parent).cloned());
+            }
+        }
     }
 
     Ok((missing, known))
