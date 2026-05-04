@@ -213,11 +213,7 @@ fn create_and_record(
 ///
 /// Returns `Ok(rule)` on success, `Err(reason)` when the rule is missing or
 /// unparseable (reason is a human-readable string for the commit message).
-fn read_commit_rule(
-    repo: &Path,
-    sha: &str,
-    name: &str,
-) -> std::result::Result<RuleConfig, String> {
+fn read_commit_rule(repo: &Path, sha: &str, name: &str) -> std::result::Result<RuleConfig, String> {
     let yaml = match git::cat_file_blob(repo, sha, ".git-xf.yaml")
         .map_err(|e| format!("error reading .git-xf.yaml: {e}"))?
     {
