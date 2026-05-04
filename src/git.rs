@@ -362,6 +362,29 @@ pub fn commit_subjects(repo: &Path, shas: &[&str]) -> Result<HashMap<String, Str
     Ok(result)
 }
 
+/// Returns SHAs of all objects reachable from `include` but not from `exclude`.
+/// Each output line's first whitespace-delimited token is the SHA.
+pub fn rev_list_objects(repo: &Path, include: &[&str], exclude: &[&str]) -> Result<Vec<String>> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(["rev-list", "--objects"]);
+    for sha in include {
+        cmd.arg(sha);
+    }
+    if !exclude.is_empty() {
+        cmd.arg("--not");
+        for sha in exclude {
+            cmd.arg(sha);
+        }
+    }
+    let out = run(&mut cmd, repo)?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 pub fn repo_root() -> Result<String> {
     let cwd = Path::new(".");
     let out = Command::new("git")

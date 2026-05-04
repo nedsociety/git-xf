@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::config::{Config, RuleSource};
-use crate::sync;
+use crate::sync::{self, ChunkLimit};
 
 const MARKER: &str = "# Installed by git-xf.";
 
@@ -90,6 +90,9 @@ pub async fn run(source_repo: &Path, git_dir: &Path, config: &Config, jobs: usiz
             false,
             jobs,
             RuleSource::Commit,
+            ChunkLimit::default(),
+            None,
+            false,
         )
         .await?;
     }

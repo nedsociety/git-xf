@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::config::RuleSource;
+use crate::sync::ChunkLimit;
 
 fn parse_jobs(s: &str) -> Result<usize, String> {
     let n: usize = s
@@ -8,6 +9,17 @@ fn parse_jobs(s: &str) -> Result<usize, String> {
         .map_err(|_| format!("`{s}` is not a valid number"))?;
     if n < 1 {
         Err("--jobs must be at least 1".to_string())
+    } else {
+        Ok(n)
+    }
+}
+
+fn parse_depth(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("`{s}` is not a valid number"))?;
+    if n == 0 {
+        Err("--depth must be at least 1 (omit the flag for unlimited)".to_string())
     } else {
         Ok(n)
     }
@@ -32,6 +44,16 @@ pub enum Commands {
         /// How to source the rule for each commit (default: commit)
         #[arg(long, default_value = "commit")]
         rule: RuleSource,
+        /// Push after every N commits or N bytes of object data (e.g. 100, 50M). 0 = single push at the end.
+        #[arg(long, default_value = "50M")]
+        push_chunk: ChunkLimit,
+        /// Transform at most N commits from each tip (BFS distance). Boundary commits become
+        /// synthetic roots; the target graph will not be complete. Must be ≥ 1.
+        #[arg(long, value_parser = parse_depth)]
+        depth: Option<usize>,
+        /// Use all refs/heads/* as tips instead of explicit REFs.
+        #[arg(long, conflicts_with = "refs")]
+        all_branches: bool,
         /// Refs to sync (default: HEAD)
         refs: Vec<String>,
     },
