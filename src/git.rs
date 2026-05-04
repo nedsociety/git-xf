@@ -385,6 +385,47 @@ pub fn rev_list_objects(repo: &Path, include: &[&str], exclude: &[&str]) -> Resu
         .collect())
 }
 
+/// Returns `sha → parent_shas` for every commit reachable from `tips` that is
+/// not reachable from any commit in `exclude`.
+///
+/// A single `git log` subprocess replaces the previous O(n) `git show` loop.
+///
+/// Note: `exclude` is passed as individual `--not <sha>` arguments. For very
+/// large repos (hundreds of thousands of cached commits) this may approach OS
+/// argument-length limits; a future improvement can stream via --stdin.
+pub fn log_parents(
+    repo: &Path,
+    tips: &[String],
+    exclude: &[&str],
+) -> Result<HashMap<String, Vec<String>>> {
+    if tips.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(["log", "--format=%H %P"]);
+    for tip in tips {
+        cmd.arg(tip);
+    }
+    if !exclude.is_empty() {
+        cmd.arg("--not");
+        for sha in exclude {
+            cmd.arg(sha);
+        }
+    }
+    let out = run(&mut cmd, repo)?;
+    let mut result = HashMap::new();
+    for line in out.lines() {
+        let mut parts = line.split_whitespace();
+        let sha = match parts.next() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let parents: Vec<String> = parts.map(str::to_owned).collect();
+        result.insert(sha, parents);
+    }
+    Ok(result)
+}
+
 pub fn repo_root() -> Result<String> {
     let cwd = Path::new(".");
     let out = Command::new("git")
