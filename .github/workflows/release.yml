@@ -11,7 +11,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
   build:
+    needs: release
     name: Build ${{ matrix.target }}
     strategy:
       fail-fast: false
@@ -77,5 +85,4 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
           files: ${{ env.ASSET }}
