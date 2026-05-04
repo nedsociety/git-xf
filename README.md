@@ -181,7 +181,10 @@ name: git-xf sync
 
 on:
   push:
-    branches: ["main"]
+
+concurrency:
+  group: git-xf-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -190,10 +193,40 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # Configure target repo credentials here (SSH key, token, etc.)
-      - run: |
-          git xf init
-          git xf sync "${{ github.event.after }}"
+
+      - name: Restore target repo cache
+        uses: actions/cache@v4
+        with:
+          path: .git/git-xf
+          key: git-xf-cache
+
+      - name: Install git-xf
+        run: curl -fsSL https://raw.githubusercontent.com/nedsociety/git-xf/main/install.sh | sh
+
+      # Configure credentials for the target repo(s). Only one is needed
+      # unless you have multiple transformations targeting different hosts.
+      - name: Configure target credentials
+        env:
+          TARGET_TOKEN: ${{ secrets.TARGET_GITHUB_TOKEN }}
+          TARGET_SSH_KEY: ${{ secrets.TARGET_SSH_KEY }}
+        run: |
+          if [ -n "$TARGET_TOKEN" ]; then
+            git config --global \
+              url."https://x-access-token:${TARGET_TOKEN}@github.com/".insteadOf \
+              "https://github.com/"
+          fi
+          if [ -n "$TARGET_SSH_KEY" ]; then
+            echo "$TARGET_SSH_KEY" > /tmp/deploy_key
+            chmod 600 /tmp/deploy_key
+            echo "GIT_SSH_COMMAND=ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no" \
+              >> "$GITHUB_ENV"
+          fi
+
+      - name: Init target repos (if cache miss)
+        run: git xf init
+
+      - name: Sync all branches
+        run: git xf sync --all-branches
 ```
 
 ---
