@@ -236,8 +236,11 @@ async fn sync_one(
                         .await?;
 
                     let post = cache.all_mappings()?;
-                    let refspecs: Vec<String> = chunk_shas
+                    // Push mapping refs for spillover from the previous round (now confirmed
+                    // in cache) plus the commits completed in this round.
+                    let refspecs: Vec<String> = spillover_shas
                         .iter()
+                        .chain(chunk_shas.iter())
                         .filter(|s| post.contains_key(*s))
                         .map(|s| {
                             let r = cache.mapping_ref(s);
@@ -248,6 +251,8 @@ async fn sync_one(
                         git::push(&cache.path, &refspecs)?;
                     }
 
+                    pushed_target_shas
+                        .extend(spillover_shas.iter().filter_map(|s| post.get(s).cloned()));
                     pushed_target_shas
                         .extend(chunk_shas.iter().filter_map(|s| post.get(s).cloned()));
 
