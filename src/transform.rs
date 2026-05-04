@@ -55,15 +55,11 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
         }
     }
 
-    let src_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "src");
-    std::fs::create_dir_all(src_wt.parent().unwrap())?;
-    git::worktree_add(&ctx.source_repo, &src_wt, &ctx.source_sha)?;
-    // force=true because rule.command leaves modified/untracked files behind
-    let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
-
-    // Resolve the effective rule: either HEAD's rule or the per-commit rule.
+    // Resolve the effective rule before creating the worktree: cat-file reads
+    // .git-xf.yaml directly from the object store, so commits with a missing
+    // or unparseable rule never pay the worktree checkout cost.
     let per_commit_rule: Option<RuleConfig> = if ctx.rule_source == RuleSource::Commit {
-        match read_commit_rule(&src_wt, &ctx.name) {
+        match read_commit_rule(&ctx.source_repo, &ctx.source_sha, &ctx.name) {
             Ok(rule) => Some(rule),
             Err(reason) => return apply_missing_policy(ctx, &info, &reason),
         }
@@ -71,6 +67,12 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
         None
     };
     let effective_rule: &RuleConfig = per_commit_rule.as_ref().unwrap_or(&ctx.config.rule);
+
+    let src_wt = wt_path(&ctx.git_dir, &ctx.name, &ctx.source_sha, "src");
+    std::fs::create_dir_all(src_wt.parent().unwrap())?;
+    git::worktree_add(&ctx.source_repo, &src_wt, &ctx.source_sha)?;
+    // force=true because rule.command leaves modified/untracked files behind
+    let _src_guard = WorktreeGuard::new(&ctx.source_repo, &src_wt, true);
 
     // In BYOT mode, create an empty staging dir and pass its path via the env var.
     let byot_dir: Option<PathBuf> = if effective_rule.target_env.is_some() {
@@ -207,18 +209,16 @@ fn create_and_record(
     Ok(target_sha)
 }
 
-/// Reads and parses the per-commit rule from `<src_wt>/.git-xf.yaml`.
+/// Reads and parses the per-commit rule directly from the object store.
 ///
 /// Returns `Ok(rule)` on success, `Err(reason)` when the rule is missing or
 /// unparseable (reason is a human-readable string for the commit message).
-fn read_commit_rule(src_wt: &Path, name: &str) -> std::result::Result<RuleConfig, String> {
-    let path = src_wt.join(".git-xf.yaml");
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err("no .git-xf.yaml in this commit".to_string());
-        }
-        Err(e) => return Err(format!("error reading .git-xf.yaml: {e}")),
+fn read_commit_rule(repo: &Path, sha: &str, name: &str) -> std::result::Result<RuleConfig, String> {
+    let yaml = match git::cat_file_blob(repo, sha, ".git-xf.yaml")
+        .map_err(|e| format!("error reading .git-xf.yaml: {e}"))?
+    {
+        Some(s) => s,
+        None => return Err("no .git-xf.yaml in this commit".to_string()),
     };
     crate::config::parse_rule(&yaml, name).map_err(|e| e.to_string())
 }
