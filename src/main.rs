@@ -23,12 +23,27 @@ async fn main() -> Result<()> {
             dry_run,
             jobs,
             rule,
+            push_chunk,
+            depth,
+            all_branches,
             refs,
         } => {
             let (source_repo, git_dir) = locate_repo()?;
             let config = config::load(&source_repo)?;
             let jobs = jobs.unwrap_or_else(default_jobs);
-            sync::run(&source_repo, &git_dir, &config, &refs, dry_run, jobs, rule).await?;
+            sync::run(
+                &source_repo,
+                &git_dir,
+                &config,
+                &refs,
+                dry_run,
+                jobs,
+                rule,
+                push_chunk,
+                depth,
+                all_branches,
+            )
+            .await?;
         }
         Commands::Init { target } => {
             let (source_repo, git_dir) = locate_repo()?;

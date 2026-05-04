@@ -1591,6 +1591,256 @@ fn test_ignore_error_skip_merge_drops_failed_root_parent() {
     );
 }
 
+// ── --all-branches ────────────────────────────────────────────────────────────
+
+/// `--all-branches` syncs every branch; shared commits are transformed once.
+#[test]
+fn test_all_branches() {
+    let env = Env::new(passthrough_config());
+    // "base" is shared between main and feat.
+    env.commit("base", &[("a.txt", "a")]);
+    env.create_branch("feat");
+    env.commit("feat commit", &[("b.txt", "b")]);
+    env.checkout("main");
+    env.commit("main commit", &[("c.txt", "c")]);
+
+    env.sync(&["--all-branches"]);
+
+    assert!(
+        env.target_ref_exists("refs/heads/main"),
+        "main missing from target"
+    );
+    assert!(
+        env.target_ref_exists("refs/heads/feat"),
+        "feat missing from target"
+    );
+    assert_eq!(env.target_commit_count("refs/heads/main"), 2);
+    assert_eq!(env.target_commit_count("refs/heads/feat"), 2);
+}
+
+/// Passing both `--all-branches` and an explicit REF is a clap conflict error.
+#[test]
+fn test_all_branches_conflicts_with_refs() {
+    let env = Env::new(passthrough_config());
+    env.commit("first", &[("a.txt", "a")]);
+
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .args(["sync", "--all-branches", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "--all-branches + explicit REF should error"
+    );
+}
+
+// ── --depth ───────────────────────────────────────────────────────────────────
+
+/// `--depth=2` on a 5-commit chain transforms only the 2 closest commits;
+/// the boundary commit becomes a synthetic root in the target.
+#[test]
+fn test_depth_limits_commits() {
+    let env = Env::new(passthrough_config());
+    env.commit("c1", &[("a.txt", "1")]);
+    env.commit("c2", &[("b.txt", "2")]);
+    env.commit("c3", &[("c.txt", "3")]);
+    let sha4 = env.commit("c4", &[("d.txt", "4")]);
+    let sha5 = env.commit("c5", &[("e.txt", "5")]);
+
+    env.sync(&["--depth=2"]);
+
+    // Only the 2 closest commits (c4 dist=1, c5 dist=0) are transformed.
+    assert_eq!(env.target_commit_count("refs/heads/main"), 2);
+
+    let target5 = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha5}"))
+        .expect("c5 should be mapped");
+    let target4 = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha4}"))
+        .expect("c4 should be mapped");
+
+    // c5 has c4 as its single parent in the target.
+    assert_eq!(env.target_parent_count(&target5), 1);
+    // c4 is a synthetic root — its parent (c3) was not transformed.
+    assert_eq!(env.target_parent_count(&target4), 0);
+}
+
+/// BFS stops at already-mapped commits before reaching the depth limit.
+#[test]
+fn test_depth_with_already_mapped() {
+    let env = Env::new(passthrough_config());
+    env.commit("c1", &[("a.txt", "1")]);
+    env.commit("c2", &[("b.txt", "2")]);
+    env.commit("c3", &[("c.txt", "3")]);
+
+    // Full sync first.
+    env.sync(&[]);
+    assert_eq!(env.target_commit_count("refs/heads/main"), 3);
+
+    // Add a new commit and sync with a depth large enough that c1-c3 would be
+    // in range, but the BFS should stop at c3 (already mapped).
+    let sha4 = env.commit("c4", &[("d.txt", "4")]);
+    env.sync(&["--depth=10"]);
+
+    // Only c4 is new; c1-c3 were not re-transformed.
+    assert_eq!(env.target_commit_count("refs/heads/main"), 4);
+    assert!(
+        env.target_ref_exists(&format!("refs/git-xf/test/{sha4}")),
+        "c4 should be mapped"
+    );
+}
+
+/// `--depth=2 --all-branches` applies the depth limit per branch tip.
+#[test]
+fn test_depth_all_branches() {
+    let env = Env::new(passthrough_config());
+    env.commit("shared", &[("a.txt", "a")]);
+    env.create_branch("feat");
+    env.commit("feat-only", &[("b.txt", "b")]);
+    env.checkout("main");
+    env.commit("main-only", &[("c.txt", "c")]);
+
+    // depth=1: only the tip of each branch (dist=0) is transformed.
+    // "shared" is at dist=1 from each tip → depth cutoff, not transformed.
+    env.sync(&["--depth=1", "--all-branches"]);
+
+    assert_eq!(env.target_commit_count("refs/heads/main"), 1);
+    assert_eq!(env.target_commit_count("refs/heads/feat"), 1);
+}
+
+/// `--depth=0` is rejected at argument parse time.
+#[test]
+fn test_depth_zero_rejected() {
+    let env = Env::new(passthrough_config());
+    env.commit("first", &[("a.txt", "a")]);
+
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .args(["sync", "--depth=0"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "--depth=0 should be rejected");
+}
+
+// ── --push-chunk ──────────────────────────────────────────────────────────────
+
+/// `--push-chunk=2` on 5 linear commits produces 3 mapping-ref pushes + 1 branch-ref push.
+#[test]
+fn test_push_chunk_count() {
+    let env = Env::new(passthrough_config());
+    env.install_post_receive_counter();
+
+    env.commit("c1", &[("a.txt", "1")]);
+    env.commit("c2", &[("b.txt", "2")]);
+    env.commit("c3", &[("c.txt", "3")]);
+    env.commit("c4", &[("d.txt", "4")]);
+    env.commit("c5", &[("e.txt", "5")]);
+
+    env.sync(&["--push-chunk=2"]);
+
+    assert_eq!(env.target_commit_count("refs/heads/main"), 5);
+    // chunks [c1,c2], [c3,c4], [c5] → 3 mapping pushes + 1 branch push = 4
+    assert_eq!(env.push_log_count(), 4);
+}
+
+/// `--push-chunk=<1B>` forces each commit into its own push round.
+#[test]
+fn test_push_chunk_size() {
+    let env = Env::new(passthrough_config());
+    env.install_post_receive_counter();
+
+    env.commit("c1", &[("a.txt", &"a".repeat(500))]);
+    env.commit("c2", &[("b.txt", &"b".repeat(500))]);
+    env.commit("c3", &[("c.txt", &"c".repeat(500))]);
+
+    // 1-byte limit forces each commit into its own chunk (best-effort single commit).
+    env.sync(&["--push-chunk=1B"]);
+
+    assert_eq!(env.target_commit_count("refs/heads/main"), 3);
+    // 3 mapping pushes + 1 branch push = 4
+    assert_eq!(env.push_log_count(), 4);
+}
+
+/// A single commit whose objects exceed the size limit is pushed as its own chunk.
+#[test]
+fn test_push_chunk_single_oversized() {
+    let env = Env::new(passthrough_config());
+    env.install_post_receive_counter();
+
+    env.commit("large", &[("big.txt", &"x".repeat(5_000))]);
+
+    env.sync(&["--push-chunk=1B"]);
+
+    assert_eq!(env.target_commit_count("refs/heads/main"), 1);
+    // 1 mapping push + 1 branch push = 2
+    assert_eq!(env.push_log_count(), 2);
+}
+
+/// `--push-chunk=0` disables chunking: exactly 1 mapping-ref push + 1 branch-ref push.
+#[test]
+fn test_push_chunk_zero() {
+    let env = Env::new(passthrough_config());
+    env.install_post_receive_counter();
+
+    env.commit("c1", &[("a.txt", "1")]);
+    env.commit("c2", &[("b.txt", "2")]);
+    env.commit("c3", &[("c.txt", "3")]);
+
+    env.sync(&["--push-chunk=0"]);
+
+    assert_eq!(env.target_commit_count("refs/heads/main"), 3);
+    // single mapping push + 1 branch push = 2
+    assert_eq!(env.push_log_count(), 2);
+}
+
+/// After a chunked sync, a second sync finds everything already mapped (no-op).
+#[test]
+fn test_push_chunk_resume() {
+    let env = Env::new(passthrough_config());
+
+    env.commit("c1", &[("a.txt", "1")]);
+    env.commit("c2", &[("b.txt", "2")]);
+    env.commit("c3", &[("c.txt", "3")]);
+
+    env.sync(&["--push-chunk=1"]);
+    assert_eq!(env.target_commit_count("refs/heads/main"), 3);
+
+    // Second sync: all commits already mapped → no new transforms.
+    env.sync(&["--push-chunk=1"]);
+    assert_eq!(env.target_commit_count("refs/heads/main"), 3);
+}
+
+// ── post-receive hook helpers ─────────────────────────────────────────────────
+
+impl Env {
+    /// Installs a post-receive hook in the target bare repo that appends one
+    /// line to `push-log.txt` per push invocation.
+    fn install_post_receive_counter(&self) {
+        let hook = self.target.join("hooks/post-receive");
+        fs::write(
+            &hook,
+            "#!/usr/bin/env sh\necho push >> \"$GIT_DIR/push-log.txt\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&hook).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&hook, perms).unwrap();
+        }
+    }
+
+    /// Returns the number of push invocations recorded by the hook counter.
+    fn push_log_count(&self) -> usize {
+        let log = self.target.join("push-log.txt");
+        fs::read_to_string(&log)
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+            .unwrap_or(0)
+    }
+}
+
 fn indoc(s: &str) -> String {
     // Strip common leading whitespace so inline test configs stay readable.
     let indent = s
