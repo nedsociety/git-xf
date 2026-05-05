@@ -36,7 +36,7 @@
     }
   },
 
-  "postCreateCommand": "rustup component add rust-src && cargo --version",
+  "postCreateCommand": "rustup component add rust-src && cargo install cargo-release && cargo --version",
 
   "remoteUser": "vscode",
 
