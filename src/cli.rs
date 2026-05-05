@@ -73,6 +73,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: HookCommands,
     },
+    /// Print the git-xf version
+    Version,
 }
 
 #[derive(Subcommand)]

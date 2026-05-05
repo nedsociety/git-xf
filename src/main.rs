@@ -55,6 +55,9 @@ async fn main() -> Result<()> {
             let config = config::load(&source_repo)?;
             status::run(&source_repo, &git_dir, &config, branch.as_deref())?;
         }
+        Commands::Version => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+        }
         Commands::Hook { command } => match command {
             HookCommands::Install => {
                 hook::install(&common_git_dir()?)?;
