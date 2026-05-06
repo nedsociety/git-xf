@@ -32,6 +32,10 @@ pub struct TransformCtx {
     pub target_parents: Vec<String>,
     /// Whether to read the rule from each commit or always use HEAD's rule.
     pub rule_source: RuleSource,
+    /// When true, skip cat-file, worktree setup, and rule execution; apply
+    /// changeless policy directly. Set by --tips-only for non-tip commits.
+    /// Bypasses read_commit_rule, so missing/parse policy is not applied.
+    pub skip_rule: bool,
 }
 
 /// Transforms one source commit and returns the resulting target SHA.
@@ -46,6 +50,22 @@ pub struct TransformCtx {
 pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     let info = git::commit_info(&ctx.source_repo, &ctx.source_sha)?;
     let is_merge = info.parents.len() > 1;
+
+    if ctx.skip_rule {
+        if is_merge {
+            let tree = parent_tree_sha(ctx)?;
+            let msg = normal_message(&info.message, &ctx.source_sha, &ctx.name);
+            return create_and_record(ctx, &tree, &msg, &info).map(Some);
+        }
+        return match ctx.config.changeless {
+            ChangelessPolicy::Skip => skip_to_parent(ctx),
+            ChangelessPolicy::EmptyCommit => {
+                let tree = parent_tree_sha(ctx)?;
+                let msg = normal_message(&info.message, &ctx.source_sha, &ctx.name);
+                create_and_record(ctx, &tree, &msg, &info).map(Some)
+            }
+        };
+    }
 
     if !is_merge {
         for pattern in &ctx.config.skip_commit_messages {

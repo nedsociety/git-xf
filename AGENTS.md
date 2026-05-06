@@ -51,6 +51,8 @@ Per named transformation in `.git-xf.yaml`:
 
 `--all-branches` uses all `refs/heads/*` as sync tips instead of explicit REFs. Conflicts with explicit REF arguments.
 
+`--tips-only` transforms only the REF arguments (the requested traversal roots), not their ancestors. Non-tip ancestors missing from the cache are treated as changeless — the rule is not run and `.git-xf.yaml` is not read; the `changeless` policy is applied directly (non-merge) or a commit carrying the first target parent's tree content is created (merge). Because the short-circuit fires before all other per-commit checks, `skip-commit-messages` and the `missing` policy are also not applied to non-tip commits. Useful for a fast initial sync when only the current tip state matters, at the cost of incomplete ancestry in the target repository.
+
 ### `git xf status [--branch <branch>]`
 
 Shows, per named transformation, which commits on the branch are Mapped / Pending / Failed. Reads mapping refs from the local cache (fetched on demand).
