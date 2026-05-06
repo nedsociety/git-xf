@@ -286,10 +286,14 @@ pub fn fetch(repo: &Path) -> Result<()> {
 /// remote on next access. Requires git 2.38+.
 pub fn repack_drop_blobs(repo: &Path) -> Result<()> {
     run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["-c", "pack.writeBitmaps=false", "repack", "-a", "-d", "--filter=blob:none"]),
+        Command::new("git").arg("-C").arg(repo).args([
+            "-c",
+            "pack.writeBitmaps=false",
+            "repack",
+            "-a",
+            "-d",
+            "--filter=blob:none",
+        ]),
         repo,
     )?;
     // After repack, blobs live in a separate pack. Delete it — the promisor
