@@ -320,11 +320,10 @@ fn pack_is_blob_only(idx: &Path) -> Result<bool> {
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let mut parts = line.split_whitespace();
         // Object lines begin with a 40- or 64-char hex SHA; summary lines do not.
-        let sha = match parts.next() {
-            Some(s) if s.len() == 40 || s.len() == 64 => s,
+        match parts.next() {
+            Some(s) if s.len() == 40 || s.len() == 64 => {}
             _ => continue,
-        };
-        let _ = sha;
+        }
         if parts.next().is_some_and(|t| t != "blob") {
             return Ok(false);
         }
