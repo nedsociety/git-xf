@@ -278,6 +278,29 @@ pub fn fetch(repo: &Path) -> Result<()> {
             .args(["fetch", "--filter=tree:0", "origin"]),
         repo,
     )?;
+    // After a partial-clone fetch the commit graph can contain entries whose
+    // objects are missing from the ODB, causing later promisor fetches to fail
+    // with "in the commit graph file but not in the object database". Verify
+    // and, if corrupt, re-fetch everything to rebuild a consistent graph.
+    if run(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["commit-graph", "verify"]),
+        repo,
+    )
+    .is_err()
+    {
+        run(
+            Command::new("git").arg("-C").arg(repo).args([
+                "fetch",
+                "--refetch",
+                "--filter=tree:0",
+                "origin",
+            ]),
+            repo,
+        )?;
+    }
     Ok(())
 }
 
