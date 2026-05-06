@@ -289,7 +289,7 @@ pub fn repack_drop_blobs(repo: &Path) -> Result<()> {
         Command::new("git")
             .arg("-C")
             .arg(repo)
-            .args(["repack", "-a", "-d", "--filter=blob:none"]),
+            .args(["-c", "pack.writeBitmaps=false", "repack", "-a", "-d", "--filter=blob:none"]),
         repo,
     )?;
     // After repack, blobs live in a separate pack. Delete it — the promisor
