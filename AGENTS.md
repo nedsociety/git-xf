@@ -398,6 +398,10 @@ Authoritative sync path — runs for all contributors, cannot be bypassed. Pre-p
 
 ---
 
+## Pull requests
+
+CI enforces `cargo fmt --check`. Always run `cargo fmt` before pushing — once locally before the first push, and again after any further commits on the branch. CI fails fast on formatting and the whole run is wasted otherwise.
+
 ## Releasing
 
 Releases are managed with [`cargo-release`](https://github.com/crate-ci/cargo-release).
