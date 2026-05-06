@@ -210,10 +210,14 @@ git -C .git/git-xf/<name>.git config --add remote.origin.fetch \
 **On each sync run**, before anything else:
 ```
 git -C .git/git-xf/<name>.git fetch --filter=tree:0 origin
+git -C .git/git-xf/<name>.git commit-graph verify   # if this fails:
+git -C .git/git-xf/<name>.git fetch --refetch --filter=tree:0 origin
 git -C .git/git-xf/<name>.git worktree prune
 ```
 
 `worktree prune` removes stale entries left by interrupted previous runs; without it the next `git worktree add` to the same path fails.
+
+After the fetch, `commit-graph verify` detects a known partial-clone failure mode where the commit graph references commits whose objects are absent from the ODB. When detected, `--refetch` forces a full re-download of all commits, rebuilding a consistent graph before any transforms begin.
 
 ---
 

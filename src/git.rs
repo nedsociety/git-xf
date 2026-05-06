@@ -292,10 +292,12 @@ pub fn fetch(repo: &Path) -> Result<()> {
     .is_err()
     {
         run(
-            Command::new("git")
-                .arg("-C")
-                .arg(repo)
-                .args(["fetch", "--refetch", "--filter=tree:0", "origin"]),
+            Command::new("git").arg("-C").arg(repo).args([
+                "fetch",
+                "--refetch",
+                "--filter=tree:0",
+                "origin",
+            ]),
             repo,
         )?;
     }
