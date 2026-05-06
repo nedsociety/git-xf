@@ -84,6 +84,8 @@ artifacts:
       make build
       cp -r dist/ "$XF_TARGET/"
     targetEnv: XF_TARGET
+    # copyParent: true  # pre-populate $XF_TARGET with the previous target
+    #                   # commit's tree for incremental builds
 
   changeless: empty-commit
   ignore-error: empty-commit
@@ -100,6 +102,7 @@ artifacts:
 | `rule.shell` | string | `"sh"` | Shell used to run `command`. `"sh"` → `sh -c`; anything else → `/usr/bin/env $shell -c` |
 | `rule.output` | string \| list \| map | entire worktree | Output-mode: files/dirs to copy from source worktree into the target commit. Each entry is `"src"` (same destination) or `"src:dst"`. Source paths may be absolute. Mutually exclusive with `targetEnv`. |
 | `rule.targetEnv` | string | — | Build-your-own-target mode: name of the env var seeded with a fresh empty directory that `command` should populate. Mutually exclusive with `output`. |
+| `rule.copyParent` | bool | `false` | Requires `targetEnv`. If true, the `targetEnv` directory is pre-populated with the first target parent commit's tree before `command` runs — useful for incremental builds that update only what changed. If the commit has multiple parents the first is used; root commits start with an empty directory as usual. |
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring-match against the source commit message; matched commits map to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), the commit is dropped and no mapping ref is written. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command`. For `skip`: map the commit to the first mapped direct parent; if no direct parent is mapped, drop the commit and write no mapping ref. For merge commits, `skip` is suppressed to preserve topology (falls back to `empty-commit`). |

@@ -152,6 +152,7 @@ artifacts:
 | `rule.shell` | string | `"sh"` | Shell used to run `command`. `"sh"` → `sh -c`; anything else → `/usr/bin/env $shell -c` |
 | `rule.output` | string \| list \| map | entire worktree | Output mode: files/dirs to copy into the target commit. Each entry is `"src"` or `"src:dst"`; source paths may be absolute. An explicit empty list (`[]`) means copy nothing. Mutually exclusive with `targetEnv`. |
 | `rule.targetEnv` | string | — | Build-your-own-target mode: name of the env var seeded with a fresh empty directory that `command` should populate. Mutually exclusive with `output`. |
+| `rule.copyParent` | bool | `false` | Requires `targetEnv` to be set. If true, the `targetEnv` directory is pre-populated with the first target parent commit's tree before `command` runs. If there are multiple source parents, the first is used. If there is no parent (root commit), the directory starts empty as usual. |
 | `changeless` | `empty-commit` \| `skip` | `empty-commit` | What to do when the transform produces no diff vs. the previous target commit. Never applies to merge commits. |
 | `skip-commit-messages` | list of strings | `[]` | Substring match against source commit message; matched commits map to the first mapped direct parent. If no direct parent is mapped (root commit, or all direct parents were dropped), the commit is dropped and no mapping ref is written. Never applies to merge commits. |
 | `ignore-error` | `error` \| `empty-commit` \| `skip` | `error` | How to handle a non-zero exit from `rule.command` |
@@ -204,7 +205,7 @@ git -C .git/git-xf/<name>.git config --add remote.origin.fetch \
   '+refs/git-xf/<name>/*:refs/git-xf/<name>/*'
 ```
 
-`--filter=tree:0` downloads commit objects eagerly, tree/blob objects lazily — sufficient since sync never checks out old target content. The extra fetch refspec is required because the default bare clone only fetches `refs/heads/*`; without it `git fetch` silently ignores all mapping refs and the cache always appears empty.
+`--filter=tree:0` downloads commit objects eagerly, tree/blob objects lazily. Sync never reads old target content in normal operation, so blobs are never needed — unless `rule.copyParent` is true, in which case git will lazily fetch the parent tree's blobs on demand when the parent worktree is checked out. The extra fetch refspec is required because the default bare clone only fetches `refs/heads/*`; without it `git fetch` silently ignores all mapping refs and the cache always appears empty.
 
 **On each sync run**, before anything else:
 ```
