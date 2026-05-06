@@ -1,6 +1,7 @@
 mod cache;
 mod cli;
 mod config;
+mod diff;
 mod error;
 mod git;
 mod hook;
@@ -11,7 +12,7 @@ mod transform;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use cli::{Cli, Commands, HookCommands};
 
@@ -54,6 +55,24 @@ async fn main() -> Result<()> {
             let (source_repo, git_dir) = locate_repo()?;
             let config = config::load(&source_repo)?;
             status::run(&source_repo, &git_dir, &config, branch.as_deref())?;
+        }
+        Commands::Diff { args } => {
+            let (transform, rest) = match args.first().map(|s| s.as_str()) {
+                Some("-x") => {
+                    let name = args
+                        .get(1)
+                        .ok_or_else(|| anyhow!("missing argument for -x"))?
+                        .clone();
+                    (Some(name), args[2..].to_vec())
+                }
+                Some(s) if s.starts_with("-x") => {
+                    bail!("-x requires a separate argument and must be the first flag");
+                }
+                _ => (None, args),
+            };
+            let (source_repo, git_dir) = locate_repo()?;
+            let config = config::load(&source_repo)?;
+            diff::run(&source_repo, &git_dir, &config, transform, rest)?;
         }
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
