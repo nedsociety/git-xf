@@ -19,26 +19,26 @@ pub fn install(git_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(hook_path.parent().unwrap())?;
     std::fs::write(&hook_path, SCRIPT)?;
     make_executable(&hook_path)?;
-    eprintln!("Installed pre-push hook: {}", hook_path.display());
+    log::info!("Installed pre-push hook: {}", hook_path.display());
     Ok(())
 }
 
 pub fn uninstall(git_dir: &Path) -> Result<()> {
     let hook_path = git_dir.join("hooks").join("pre-push");
     if !hook_path.exists() {
-        eprintln!("No pre-push hook found.");
+        log::info!("No pre-push hook found.");
         return Ok(());
     }
     let content = std::fs::read_to_string(&hook_path)?;
     if !content.contains(MARKER) {
-        eprintln!(
+        log::info!(
             "Skipping: {} was not installed by git-xf.",
             hook_path.display()
         );
         return Ok(());
     }
     std::fs::remove_file(&hook_path)?;
-    eprintln!("Removed pre-push hook: {}", hook_path.display());
+    log::info!("Removed pre-push hook: {}", hook_path.display());
     Ok(())
 }
 

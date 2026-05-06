@@ -1,5 +1,6 @@
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -34,6 +35,21 @@ pub struct TransformCtx {
     pub rule_source: RuleSource,
 }
 
+/// What happened to a source commit during transformation. Used both to
+/// determine the public `Option<String>` return and to classify the per-commit
+/// DEBUG log line.
+enum Outcome {
+    /// A new target commit was created from real rule output.
+    Mapped(String),
+    /// A target commit was created with the parent's tree (changeless,
+    /// error empty-commit, or missing-rule empty-commit).
+    Empty(String),
+    /// Source commit collapsed onto its first mapped parent.
+    Skipped(String),
+    /// Source commit had no parent to skip to and was dropped entirely.
+    Dropped,
+}
+
 /// Transforms one source commit and returns the resulting target SHA.
 ///
 /// Returns `Ok(None)` when the commit is dropped with no ancestor to map to
@@ -44,6 +60,35 @@ pub struct TransformCtx {
 /// Callers are responsible for acquiring any concurrency semaphore permit
 /// before calling this.
 pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
+    log::debug!(
+        "transform[{}]: start {} ({} parents)",
+        ctx.name,
+        short(&ctx.source_sha),
+        ctx.target_parents.len()
+    );
+    let outcome = transform_commit_inner(ctx)?;
+    log::debug!(
+        "transform[{}]: {} → {}",
+        ctx.name,
+        short(&ctx.source_sha),
+        match &outcome {
+            Outcome::Mapped(s) => format!("Mapped({})", short(s)),
+            Outcome::Empty(s) => format!("Empty({})", short(s)),
+            Outcome::Skipped(s) => format!("Skipped→{}", short(s)),
+            Outcome::Dropped => "Dropped".to_string(),
+        }
+    );
+    Ok(match outcome {
+        Outcome::Mapped(s) | Outcome::Empty(s) | Outcome::Skipped(s) => Some(s),
+        Outcome::Dropped => None,
+    })
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..8).unwrap_or(sha)
+}
+
+fn transform_commit_inner(ctx: &TransformCtx) -> Result<Outcome> {
     let info = git::commit_info(&ctx.source_repo, &ctx.source_sha)?;
     let is_merge = info.parents.len() > 1;
 
@@ -98,7 +143,7 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     };
     let _byot_guard = byot_dir.as_ref().map(|p| CleanupDir(p.clone()));
 
-    match run_rule(&src_wt, effective_rule, byot_dir.as_deref()) {
+    match run_rule(&ctx.name, &ctx.source_sha, &src_wt, effective_rule, byot_dir.as_deref()) {
         Ok(()) => {}
         Err(stderr) => match ctx.config.ignore_error {
             IgnoreErrorPolicy::Error => {
@@ -115,14 +160,14 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
                     // fall back to empty-commit to preserve all parent edges.
                     let tree = parent_tree_sha(ctx)?;
                     let msg = error_message(&ctx.name, &ctx.source_sha, &stderr);
-                    return create_and_record(ctx, &tree, &msg, &info).map(Some);
+                    return create_and_record(ctx, &tree, &msg, &info).map(Outcome::Empty);
                 }
                 return skip_to_parent(ctx);
             }
             IgnoreErrorPolicy::EmptyCommit => {
                 let tree = parent_tree_sha(ctx)?;
                 let msg = error_message(&ctx.name, &ctx.source_sha, &stderr);
-                return create_and_record(ctx, &tree, &msg, &info).map(Some);
+                return create_and_record(ctx, &tree, &msg, &info).map(Outcome::Empty);
             }
         },
     }
@@ -151,35 +196,41 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     git::git_add_all(&tgt_wt)?;
     let tree = git::write_tree(&tgt_wt)?;
 
+    let mut is_empty = false;
     if !is_merge {
         if let Some(p_tree) = parent_tree_sha_opt(ctx)? {
             if tree == p_tree {
                 match ctx.config.changeless {
                     ChangelessPolicy::Skip => return skip_to_parent(ctx),
-                    ChangelessPolicy::EmptyCommit => {}
+                    ChangelessPolicy::EmptyCommit => is_empty = true,
                 }
             }
         }
     }
 
     let msg = normal_message(&info.message, &ctx.source_sha, &ctx.name);
-    create_and_record(ctx, &tree, &msg, &info).map(Some)
+    let target = create_and_record(ctx, &tree, &msg, &info)?;
+    Ok(if is_empty {
+        Outcome::Empty(target)
+    } else {
+        Outcome::Mapped(target)
+    })
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Records source→parent mapping and returns the parent target SHA.
 ///
-/// Returns `Ok(None)` if the commit is a root with no parent to skip to —
-/// the commit is dropped entirely and no cache entry is written.
-fn skip_to_parent(ctx: &TransformCtx) -> Result<Option<String>> {
+/// Returns `Outcome::Dropped` if the commit is a root with no parent to skip
+/// to — the commit is dropped entirely and no cache entry is written.
+fn skip_to_parent(ctx: &TransformCtx) -> Result<Outcome> {
     match ctx.target_parents.first() {
         Some(sha) => {
             let sha = sha.clone();
             ctx.cache.set_mapping(&ctx.source_sha, &sha)?;
-            Ok(Some(sha))
+            Ok(Outcome::Skipped(sha))
         }
-        None => Ok(None),
+        None => Ok(Outcome::Dropped),
     }
 }
 
@@ -241,7 +292,7 @@ fn apply_missing_policy(
     ctx: &TransformCtx,
     info: &CommitInfo,
     reason: &str,
-) -> Result<Option<String>> {
+) -> Result<Outcome> {
     match ctx.config.missing {
         MissingPolicy::Error => Err(Error::MissingRule {
             name: ctx.name.clone(),
@@ -252,7 +303,7 @@ fn apply_missing_policy(
         MissingPolicy::EmptyCommit => {
             let tree = parent_tree_sha(ctx)?;
             let msg = missing_rule_message(&ctx.name, &ctx.source_sha, reason);
-            create_and_record(ctx, &tree, &msg, info).map(Some)
+            create_and_record(ctx, &tree, &msg, info).map(Outcome::Empty)
         }
         MissingPolicy::Skip => skip_to_parent(ctx),
     }
@@ -336,7 +387,15 @@ fn byot_path(git_dir: &Path, name: &str, sha: &str) -> PathBuf {
 /// In BYOT mode, `byot_dir` is passed as the value of `rule.target_env`.
 ///
 /// Returns `Err(combined stdout+stderr)` on non-zero exit.
+///
+/// At TRACE level the child's stdout and stderr are streamed line-by-line
+/// (one `trace!` call per line, emitted as the line is read) instead of
+/// being buffered until the process exits, so a long-running rule's progress
+/// is visible in real time. When TRACE is off, `cmd.output()` is used directly
+/// — no extra threads or pipes.
 fn run_rule(
+    name: &str,
+    source_sha: &str,
     wt_path: &Path,
     rule: &RuleConfig,
     byot_dir: Option<&Path>,
@@ -354,20 +413,110 @@ fn run_rule(
     if let (Some(env_name), Some(dir)) = (&rule.target_env, byot_dir) {
         cmd.env(env_name, dir);
     }
+
+    if log::log_enabled!(log::Level::Trace) {
+        log::trace!(
+            "rule[{name}/{}]: shell={} cwd={} byot={:?}",
+            short(source_sha),
+            rule.shell,
+            wt_path.display(),
+            byot_dir
+        );
+        log::trace!(
+            "rule[{name}/{}]: command:\n{}",
+            short(source_sha),
+            rule.command
+        );
+        run_rule_streaming(name, source_sha, &mut cmd)
+    } else {
+        run_rule_buffered(&mut cmd)
+    }
+}
+
+/// Default fast path: capture stdout/stderr in one syscall, no extra threads.
+fn run_rule_buffered(cmd: &mut Command) -> std::result::Result<(), String> {
     cmd.output().map_err(|e| e.to_string()).and_then(|out| {
         if out.status.success() {
             Ok(())
         } else {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let stderr = String::from_utf8_lossy(&out.stderr);
-            let combined = match (stdout.trim_end(), stderr.trim_end()) {
-                ("", s) => s.to_string(),
-                (o, "") => o.to_string(),
-                (o, s) => format!("{o}\n{s}"),
-            };
-            Err(combined)
+            Err(combine_streams(stdout.trim_end(), stderr.trim_end()))
         }
     })
+}
+
+/// TRACE path: pipe both streams, spawn one reader thread per stream that
+/// emits `trace!` per line, then reconstruct the combined output for the
+/// failure-path return contract.
+fn run_rule_streaming(
+    name: &str,
+    source_sha: &str,
+    cmd: &mut Command,
+) -> std::result::Result<(), String> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let stdout_t = spawn_stream_reader(stdout, name.to_string(), source_sha.to_string(), "stdout");
+    let stderr_t = spawn_stream_reader(stderr, name.to_string(), source_sha.to_string(), "stderr");
+
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let stdout_buf = stdout_t.join().unwrap_or_default();
+    let stderr_buf = stderr_t.join().unwrap_or_default();
+
+    log::trace!(
+        "rule[{name}/{}]: exit={}",
+        short(source_sha),
+        status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
+    );
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(combine_streams(
+            stdout_buf.trim_end(),
+            stderr_buf.trim_end(),
+        ))
+    }
+}
+
+fn spawn_stream_reader<R: Read + Send + 'static>(
+    reader: R,
+    name: String,
+    sha: String,
+    kind: &'static str,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let mut br = BufReader::new(reader);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match br.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim_end_matches(['\n', '\r']);
+                    log::trace!("rule[{name}/{}]: {kind}: {trimmed}", short(&sha));
+                    buf.push_str(&line);
+                }
+                Err(_) => break,
+            }
+        }
+        buf
+    })
+}
+
+fn combine_streams(stdout: &str, stderr: &str) -> String {
+    match (stdout, stderr) {
+        ("", s) => s.to_string(),
+        (o, "") => o.to_string(),
+        (o, s) => format!("{o}\n{s}"),
+    }
 }
 
 /// Copies `output` paths from source worktree to target worktree.
@@ -377,7 +526,10 @@ fn run_rule(
 /// always relative to `tgt_wt`.
 fn copy_output(src_wt: &Path, tgt_wt: &Path, output: Option<&OutputSpec>) -> Result<()> {
     let spec = match output {
-        None => return copy_recursive(src_wt, tgt_wt),
+        None => {
+            log::trace!("copy: {} → {} (whole worktree)", src_wt.display(), tgt_wt.display());
+            return copy_recursive(src_wt, tgt_wt);
+        }
         Some(s) => s,
     };
     for (src_rel, dst_rel) in spec.paths() {
@@ -387,10 +539,11 @@ fn copy_output(src_wt: &Path, tgt_wt: &Path, output: Option<&OutputSpec>) -> Res
             src_wt.join(src_rel)
         };
         let dst = tgt_wt.join(dst_rel);
+        log::trace!("copy: {} → {}", src.display(), dst.display());
         let meta = match std::fs::symlink_metadata(&src) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "warning: output path '{}' not found; \
+                log::warn!(
+                    "output path '{}' not found; \
                      it will be absent from the target commit",
                     src.display(),
                 );
@@ -447,8 +600,8 @@ fn recreate_symlink(src: &Path, tgt: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn recreate_symlink(src: &Path, tgt: &Path) -> Result<()> {
-    eprintln!(
-        "warning: symlink {} cannot be recreated on this platform; copying file content instead",
+    log::warn!(
+        "symlink {} cannot be recreated on this platform; copying file content instead",
         src.display()
     );
     std::fs::copy(src, tgt)?;
@@ -500,16 +653,16 @@ impl Drop for WorktreeGuard {
         cmd.arg(&self.path);
         let removed = match cmd.output() {
             Ok(out) if !out.status.success() => {
-                eprintln!(
-                    "warning: git worktree remove failed for {}: {}",
+                log::warn!(
+                    "git worktree remove failed for {}: {}",
                     self.path.display(),
                     String::from_utf8_lossy(&out.stderr).trim_end(),
                 );
                 false
             }
             Err(e) => {
-                eprintln!(
-                    "warning: could not run git worktree remove for {}: {e}",
+                log::warn!(
+                    "could not run git worktree remove for {}: {e}",
                     self.path.display(),
                 );
                 false

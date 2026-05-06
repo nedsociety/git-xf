@@ -140,9 +140,15 @@ async fn sync_one(
     cache.fetch_and_prune()?;
 
     let tip_shas = resolve_tips(source_repo, refs)?;
+    log::debug!("sync[{name}]: tips = {:?}", tip_shas);
 
     let pre_mapped = cache.all_mappings()?;
     let (missing, init_mappings) = find_missing(source_repo, &pre_mapped, &tip_shas, depth)?;
+    log::debug!(
+        "sync[{name}]: {} missing, {} cached, depth={depth:?}",
+        missing.len(),
+        init_mappings.len()
+    );
 
     if dry_run {
         if missing.is_empty() {
@@ -157,7 +163,7 @@ async fn sync_one(
 
     let total_missing = missing.len();
     if total_missing > 0 {
-        eprintln!("[{name}] transforming {} commit(s)...", total_missing);
+        log::info!("[{name}] transforming {} commit(s)...", total_missing);
 
         let config_arc = Arc::new(cfg.clone());
         let make_ctx = || DispatchCtx {
@@ -175,6 +181,7 @@ async fn sync_one(
                 let ordered = topo_order(&missing);
                 let mut current_known: KnownMap = init_mappings;
                 let mut chunk_start = 0;
+                let mut chunk_idx = 0usize;
 
                 while chunk_start < ordered.len() {
                     let chunk_end = match chunk_limit {
@@ -183,6 +190,10 @@ async fn sync_one(
                         ChunkLimit::Size(_) => unreachable!(),
                     };
                     let chunk_shas = &ordered[chunk_start..chunk_end];
+                    log::debug!(
+                        "sync[{name}]: chunk {chunk_idx}: {} commits",
+                        chunk_shas.len()
+                    );
 
                     let chunk_missing: MissingMap = chunk_shas
                         .iter()
@@ -201,6 +212,10 @@ async fn sync_one(
                             format!("{r}:{r}")
                         })
                         .collect();
+                    log::debug!(
+                        "sync[{name}]: pushing {} mapping refs",
+                        refspecs.len()
+                    );
                     blocking_push(cache.path.clone(), refspecs).await?;
 
                     current_known = post
@@ -209,6 +224,7 @@ async fn sync_one(
                         .chain(dropped.into_iter().map(|k| (k, None)))
                         .collect();
                     chunk_start = chunk_end;
+                    chunk_idx += 1;
                 }
             }
 
@@ -218,11 +234,16 @@ async fn sync_one(
                 let mut pushed_target_shas: Vec<String> = vec![];
                 let mut spillover_shas: Vec<String> = vec![];
                 let mut spillover_accumulated: u64 = 0;
+                let mut chunk_idx = 0usize;
 
                 loop {
                     if remaining.is_empty() && spillover_shas.is_empty() {
                         break;
                     }
+                    log::debug!(
+                        "sync[{name}]: chunk {chunk_idx}: accumulated {spillover_accumulated}B / limit {size_limit}B, {} remaining",
+                        remaining.len()
+                    );
 
                     let spillover_target_shas: Vec<String> = {
                         let post = cache.all_mappings()?;
@@ -256,6 +277,10 @@ async fn sync_one(
                             format!("{r}:{r}")
                         })
                         .collect();
+                    log::debug!(
+                        "sync[{name}]: pushing {} mapping refs",
+                        refspecs.len()
+                    );
                     blocking_push(cache.path.clone(), refspecs).await?;
 
                     pushed_target_shas
@@ -287,6 +312,7 @@ async fn sync_one(
                         .collect();
                     remaining = next_remaining;
                     spillover_shas = next_spillover;
+                    chunk_idx += 1;
                 }
             }
         }
@@ -302,10 +328,14 @@ async fn sync_one(
             branch_refspecs.push(format!("{refname}:{refname}"));
         }
     }
+    log::debug!(
+        "sync[{name}]: pushing {} branch/tag refs",
+        branch_refspecs.len()
+    );
     blocking_push(cache.path.clone(), branch_refspecs).await?;
 
     if total_missing > 0 {
-        eprintln!("[{name}] synced {} commit(s)", total_missing);
+        log::info!("[{name}] synced {} commit(s)", total_missing);
     }
     Ok(())
 }
@@ -385,6 +415,12 @@ fn find_missing(
         }
     }
 
+    log::debug!(
+        "find_missing: visited {} commits ({} missing, {} known)",
+        visited.len(),
+        missing.len(),
+        known.len()
+    );
     Ok((missing, known))
 }
 

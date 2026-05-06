@@ -19,7 +19,7 @@ pub fn run(git_dir: &Path, config: &Config, target_override: Option<&str>) -> Re
         cfg.target = target.to_string();
         let cache = Cache::new(git_dir, name);
         cache.ensure_initialized(&cfg.target)?;
-        eprintln!("Initialized '{name}' → {}", cfg.target);
+        log::info!("Initialized '{name}' → {}", cfg.target);
     } else {
         let mut names: Vec<&String> = config.keys().collect();
         names.sort();
@@ -27,7 +27,7 @@ pub fn run(git_dir: &Path, config: &Config, target_override: Option<&str>) -> Re
             let cfg = &config[name];
             let cache = Cache::new(git_dir, name);
             cache.ensure_initialized(&cfg.target)?;
-            eprintln!("Initialized '{name}' → {}", cfg.target);
+            log::info!("Initialized '{name}' → {}", cfg.target);
         }
     }
     Ok(())
