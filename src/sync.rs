@@ -148,7 +148,7 @@ async fn sync_one(
     let pre_mapped = cache.all_mappings()?;
     let (missing, init_mappings) = find_missing(source_repo, &pre_mapped, &tip_shas, depth)?;
     log::debug!(
-        "sync[{name}]: {} missing, {} cached, depth={depth:?}",
+        "sync[{name}]: {} missing, {} cached, depth={depth:?}, tips_only={tips_only}",
         missing.len(),
         init_mappings.len()
     );

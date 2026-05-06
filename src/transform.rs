@@ -102,6 +102,11 @@ fn transform_commit_inner(ctx: &TransformCtx) -> Result<Outcome> {
     let is_merge = info.parents.len() > 1;
 
     if ctx.skip_rule {
+        log::trace!(
+            "transform[{}]: {} skip_rule (tips-only)",
+            ctx.name,
+            short(&ctx.source_sha)
+        );
         if is_merge {
             let tree = parent_tree_sha(ctx)?;
             let msg = normal_message(&info.message, &ctx.source_sha, &ctx.name);
