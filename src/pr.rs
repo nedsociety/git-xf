@@ -9,11 +9,17 @@ use crate::config::Config;
 use crate::git;
 
 /// Parse `url` as a GitHub remote URL and return `(org, repo)` with any
-/// trailing `.git` stripped.  Accepts HTTPS and SSH forms.
+/// trailing `.git` stripped.  Accepts HTTPS (with or without credentials)
+/// and SSH forms.
 fn parse_github_url(url: &str) -> Option<(String, String)> {
-    // HTTPS: https://github.com/<org>/<repo>[.git]
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        return split_org_repo(rest);
+    // HTTPS: https://[<user>[:<token>]@]github.com/<org>/<repo>[.git]
+    if let Some(after_scheme) = url.strip_prefix("https://") {
+        // Strip optional credentials (everything up to and including '@').
+        let host_and_path = match after_scheme.find("@github.com/") {
+            Some(at) => &after_scheme[at + "@github.com/".len()..],
+            None => after_scheme.strip_prefix("github.com/")?,
+        };
+        return split_org_repo(host_and_path);
     }
     // SSH: git@github.com:<org>/<repo>[.git]
     if let Some(rest) = url.strip_prefix("git@github.com:") {

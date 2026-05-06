@@ -2147,7 +2147,13 @@ fn test_diff_err_multiple_transforms_no_x() {
     assert!(stderr.contains("use -x"), "expected 'use -x': {stderr}");
 }
 
-/// Unknown revision: error mentions the unknown ref.
+/// Unknown revision: the bad ref is forwarded to git diff which then errors.
+///
+/// Note: `nonexistent-ref` fails rev-parse and is silently skipped as a
+/// non-revision token (the token-walking design). `HEAD` is the only RevToken,
+/// so we enter single-commit form. The reconstructed argv fed to `git diff` in
+/// the target is `["nonexistent-ref", <mapped-sha>, <mapped-sha>]`, which git
+/// rejects — producing an error that happens to mention `"nonexistent-ref"`.
 #[test]
 fn test_diff_err_unknown_revision() {
     let env = Env::new(passthrough_config());
@@ -2320,6 +2326,35 @@ fn test_pr_https_no_git_suffix() {
     assert!(
         !stdout.contains(".git"),
         "URL must not contain .git: {stdout}"
+    );
+}
+
+/// HTTPS remote with embedded credentials (e.g. GitHub token via git config).
+#[test]
+fn test_pr_https_with_credentials() {
+    let env = Env::new(passthrough_config());
+    env.commit("first", &[("a.txt", "aaa")]);
+    env.sync(&[]);
+    set_cache_remote_url(
+        &env,
+        "test",
+        "https://x-access-token:ghp_abc123@github.com/org/repo.git",
+    );
+
+    let out = env.run_pr(&["main"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("github.com/org/repo/compare/main"),
+        "unexpected URL: {stdout}"
+    );
+    assert!(
+        !stdout.contains("ghp_abc123"),
+        "credentials must not appear in URL: {stdout}"
     );
 }
 

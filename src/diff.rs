@@ -14,8 +14,8 @@ struct RevToken {
     idx: usize,
     lhs: String,
     lhs_sha: String,
-    rhs: Option<String>,
-    rhs_sha: Option<String>,
+    /// `(rhs_refname, rhs_sha)` when a `..`/`...` separator was found.
+    rhs: Option<(String, String)>,
     /// "" | ".." | "..."
     sep: &'static str,
 }
@@ -48,8 +48,10 @@ fn verify_ref(repo: &Path, refname: &str) -> Result<String> {
 /// Walk `options_and_revs`, skip `-`-prefixed tokens, try each remaining
 /// token as a revision spec (possibly containing `..` or `...`).
 ///
-/// Returns the list of matched `RevToken`s (at most 2) with SHAs resolved.
-fn find_rev_tokens(repo: &Path, options_and_revs: &[String]) -> Result<Vec<RevToken>> {
+/// Returns matched `RevToken`s (at most 2) with SHAs resolved. Tokens that
+/// fail rev-parse are silently left as non-revision tokens (e.g. bare paths
+/// before `--`); this is intentional per the token-walking design.
+fn find_rev_tokens(repo: &Path, options_and_revs: &[String]) -> Vec<RevToken> {
     let mut tokens = Vec::new();
     let mut i = 0;
     while i < options_and_revs.len() {
@@ -68,8 +70,7 @@ fn find_rev_tokens(repo: &Path, options_and_revs: &[String]) -> Result<Vec<RevTo
                     idx: i,
                     lhs: lhs.to_string(),
                     lhs_sha,
-                    rhs: Some(rhs.to_string()),
-                    rhs_sha: Some(rhs_sha),
+                    rhs: Some((rhs.to_string(), rhs_sha)),
                     sep,
                 });
             }
@@ -79,14 +80,12 @@ fn find_rev_tokens(repo: &Path, options_and_revs: &[String]) -> Result<Vec<RevTo
                 lhs: tok.to_string(),
                 lhs_sha: sha,
                 rhs: None,
-                rhs_sha: None,
                 sep: "",
             });
         }
-        // Unverified non-flag tokens are left unchanged (bare paths before `--`).
         i += 1;
     }
-    Ok(tokens)
+    tokens
 }
 
 pub fn run(
@@ -120,11 +119,11 @@ pub fn run(
     let dash_pos = rest.iter().position(|t| t == "--");
     let (options_and_revs, paths) = match dash_pos {
         Some(pos) => (rest[..pos].to_vec(), rest[pos..].to_vec()),
-        None => (rest.clone(), vec![]),
+        None => (rest, vec![]),
     };
 
     // Find revision tokens (SHAs pre-resolved).
-    let rev_tokens = find_rev_tokens(source_repo, &options_and_revs)?;
+    let rev_tokens = find_rev_tokens(source_repo, &options_and_revs);
     if rev_tokens.is_empty() {
         bail!("no revision arguments found");
     }
@@ -159,8 +158,8 @@ pub fn run(
     let mut to_look_up: Vec<(&str, &str)> = Vec::new();
     for tok in &rev_tokens {
         to_look_up.push((&tok.lhs, &tok.lhs_sha));
-        if let (Some(rhs), Some(rhs_sha)) = (&tok.rhs, &tok.rhs_sha) {
-            to_look_up.push((rhs.as_str(), rhs_sha.as_str()));
+        if let Some((rhs_ref, rhs_sha)) = &tok.rhs {
+            to_look_up.push((rhs_ref.as_str(), rhs_sha.as_str()));
         }
     }
     if let Some(ref h) = head_sha {
@@ -206,14 +205,14 @@ pub fn run(
     }
 
     // Reconstruct the arg list with substituted target SHAs.
-    let mut reconstructed: Vec<String> = options_and_revs.clone();
+    let mut reconstructed = options_and_revs;
     for tok in &rev_tokens {
         let target_lhs = &sha_to_target[&tok.lhs_sha];
-        if tok.sep.is_empty() {
-            reconstructed[tok.idx] = target_lhs.clone();
-        } else {
-            let target_rhs = &sha_to_target[tok.rhs_sha.as_ref().unwrap()];
+        if let Some((_, rhs_sha)) = &tok.rhs {
+            let target_rhs = &sha_to_target[rhs_sha];
             reconstructed[tok.idx] = format!("{target_lhs}{}{target_rhs}", tok.sep);
+        } else {
+            reconstructed[tok.idx] = target_lhs.clone();
         }
     }
 
