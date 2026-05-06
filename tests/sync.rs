@@ -1414,11 +1414,15 @@ fn test_tips_only_linear_changeless_skip() {
         "middle should map to root's target (changeless:skip, rule not run)"
     );
     // Tip is fully transformed and gets its own target commit.
-    assert_ne!(tip_target, mid_target, "tip should have its own target commit");
+    assert_ne!(
+        tip_target, mid_target,
+        "tip should have its own target commit"
+    );
 
     // Tip's full worktree (a, b, c) is in the target.
     assert!(
-        env.target_tree_files(&tip_target).contains(&"c.txt".to_string()),
+        env.target_tree_files(&tip_target)
+            .contains(&"c.txt".to_string()),
         "tip's target should contain c.txt (rule ran)"
     );
 }
@@ -1467,7 +1471,8 @@ fn test_tips_only_non_tip_merge_preserves_topology() {
     );
     // Tip's own file is present in the target (rule did run for it).
     assert!(
-        env.target_tree_files(&target_tip).contains(&"tip.txt".to_string()),
+        env.target_tree_files(&target_tip)
+            .contains(&"tip.txt".to_string()),
         "tip.txt should be in tip's target tree (rule ran)"
     );
 }
@@ -1500,8 +1505,7 @@ fn test_tips_only_bypasses_skip_commit_messages() {
         .expect("root should be mapped");
     let mid_target = env
         .target_ref_sha(&format!("refs/git-xf/test/{sha_mid}"))
-        .expect("middle should be mapped even with [skip-xf] message under --tips-only"
-        );
+        .expect("middle should be mapped even with [skip-xf] message under --tips-only");
 
     // Under --tips-only the message is never checked: middle gets
     // changeless:empty-commit (default), creating a new target commit rather
