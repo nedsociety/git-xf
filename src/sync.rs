@@ -86,6 +86,7 @@ pub async fn run(
     chunk_limit: ChunkLimit,
     depth: Option<usize>,
     all_branches: bool,
+    tips_only: bool,
 ) -> Result<()> {
     let effective_refs: Vec<String> = if all_branches {
         git::for_each_ref(source_repo, &["refs/heads/"])?
@@ -113,6 +114,7 @@ pub async fn run(
             rule_source,
             chunk_limit,
             depth,
+            tips_only,
         )
         .await
         .with_context(|| format!("transformation '{name}' failed"))?;
@@ -134,6 +136,7 @@ async fn sync_one(
     rule_source: RuleSource,
     chunk_limit: ChunkLimit,
     depth: Option<usize>,
+    tips_only: bool,
 ) -> Result<()> {
     let cache = Arc::new(Cache::new(git_dir, name));
     cache.ensure_initialized(&cfg.target)?;
@@ -155,8 +158,14 @@ async fn sync_one(
             return Ok(());
         }
         println!("[{name}] would transform {} commit(s):", missing.len());
+        let dry_tip_set: HashSet<&str> = tip_shas.iter().map(|s| s.as_str()).collect();
         for sha in topo_order(&missing) {
-            println!("  {sha}");
+            let label = if tips_only && !dry_tip_set.contains(sha.as_str()) {
+                " (changeless)"
+            } else {
+                ""
+            };
+            println!("  {sha}{label}");
         }
         return Ok(());
     }
@@ -166,6 +175,7 @@ async fn sync_one(
         log::info!("[{name}] transforming {} commit(s)...", total_missing);
 
         let config_arc = Arc::new(cfg.clone());
+        let tip_set = Arc::new(tip_shas.iter().cloned().collect::<HashSet<String>>());
         let make_ctx = || DispatchCtx {
             source_repo: source_repo.to_path_buf(),
             git_dir: git_dir.to_path_buf(),
@@ -174,6 +184,8 @@ async fn sync_one(
             name: name.to_string(),
             jobs,
             rule_source,
+            tips_only,
+            tip_set: tip_set.clone(),
         };
 
         match chunk_limit {
@@ -478,6 +490,8 @@ struct DispatchCtx {
     name: String,
     jobs: usize,
     rule_source: RuleSource,
+    tips_only: bool,
+    tip_set: Arc<HashSet<String>>,
 }
 
 /// Transforms all commits in `missing` in parallel (bounded by `jobs`),
@@ -497,6 +511,8 @@ async fn dispatch(
         name,
         jobs,
         rule_source,
+        tips_only,
+        tip_set,
     } = ctx;
     let mut in_degree: HashMap<String, usize> =
         missing.keys().map(|k| (k.clone(), 0usize)).collect();
@@ -541,6 +557,7 @@ async fn dispatch(
                     .filter_map(|p| m.get(p).and_then(|v| v.clone()))
                     .collect()
             };
+            let skip_rule = tips_only && !tip_set.contains(&sha);
             let transform_ctx = TransformCtx {
                 source_repo: source_repo.clone(),
                 git_dir: git_dir.clone(),
@@ -550,6 +567,7 @@ async fn dispatch(
                 name: name.clone(),
                 target_parents,
                 rule_source,
+                skip_rule,
             };
             let tx = done_tx.clone();
             tokio::spawn(async move {
@@ -630,6 +648,8 @@ async fn dispatch_size_chunk(
         name,
         jobs,
         rule_source,
+        tips_only,
+        tip_set,
     } = ctx;
 
     let mut in_degree: HashMap<String, usize> =
@@ -686,6 +706,7 @@ async fn dispatch_size_chunk(
                         .filter_map(|p| m.get(p).and_then(|v| v.clone()))
                         .collect()
                 };
+                let skip_rule = tips_only && !tip_set.contains(&sha);
                 let transform_ctx = TransformCtx {
                     source_repo: source_repo.clone(),
                     git_dir: git_dir.clone(),
@@ -695,6 +716,7 @@ async fn dispatch_size_chunk(
                     name: name.clone(),
                     target_parents,
                     rule_source,
+                    skip_rule,
                 };
                 let tx = done_tx.clone();
                 tokio::spawn(async move {

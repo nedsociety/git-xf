@@ -64,6 +64,9 @@ pub enum Commands {
         /// Use all refs/heads/* as tips instead of explicit REFs.
         #[arg(long, conflicts_with = "refs")]
         all_branches: bool,
+        /// Skip rule execution for non-tip commits; apply changeless policy directly.
+        #[arg(long)]
+        tips_only: bool,
         /// Refs to sync (default: HEAD)
         refs: Vec<String>,
     },

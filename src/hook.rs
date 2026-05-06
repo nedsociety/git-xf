@@ -93,6 +93,7 @@ pub async fn run(source_repo: &Path, git_dir: &Path, config: &Config, jobs: usiz
             ChunkLimit::default(),
             None,
             false,
+            false,
         )
         .await?;
     }
