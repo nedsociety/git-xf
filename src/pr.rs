@@ -40,12 +40,24 @@ fn split_org_repo(s: &str) -> Option<(String, String)> {
 /// Try to open `url` with a platform opener (non-blocking).
 /// Returns `true` if an opener was found and spawned successfully.
 fn try_open(url: &str) -> bool {
-    for cmd in &["open", "xdg-open"] {
-        if Command::new(cmd).arg(url).spawn().is_ok() {
-            return true;
-        }
+    #[cfg(windows)]
+    {
+        // `start` treats the first quoted argument as the window title; use an
+        // empty title so `url` is opened as a document/URL.
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .is_ok()
     }
-    false
+    #[cfg(not(windows))]
+    {
+        for cmd in &["open", "xdg-open"] {
+            if Command::new(cmd).arg(url).spawn().is_ok() {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub fn run(
@@ -116,7 +128,7 @@ pub fn run(
         None => format!("https://github.com/{org}/{repo}/compare/{branch}"),
     };
 
-    // Open if interactive TTY and opener is available; otherwise print.
+    // Open when stdout looks interactive (skip headless/CI) and the OS opener works.
     if std::io::stdout().is_terminal() && try_open(&compare_url) {
         return Ok(());
     }
