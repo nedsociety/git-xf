@@ -50,6 +50,17 @@ enum Outcome {
     Dropped,
 }
 
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Outcome::Mapped(s) => write!(f, "Mapped({})", short(s)),
+            Outcome::Empty(s) => write!(f, "Empty({})", short(s)),
+            Outcome::Skipped(s) => write!(f, "Skipped→{}", short(s)),
+            Outcome::Dropped => f.write_str("Dropped"),
+        }
+    }
+}
+
 /// Transforms one source commit and returns the resulting target SHA.
 ///
 /// Returns `Ok(None)` when the commit is dropped with no ancestor to map to
@@ -68,15 +79,9 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
     );
     let outcome = transform_commit_inner(ctx)?;
     log::debug!(
-        "transform[{}]: {} → {}",
+        "transform[{}]: {} → {outcome}",
         ctx.name,
         short(&ctx.source_sha),
-        match &outcome {
-            Outcome::Mapped(s) => format!("Mapped({})", short(s)),
-            Outcome::Empty(s) => format!("Empty({})", short(s)),
-            Outcome::Skipped(s) => format!("Skipped→{}", short(s)),
-            Outcome::Dropped => "Dropped".to_string(),
-        }
     );
     Ok(match outcome {
         Outcome::Mapped(s) | Outcome::Empty(s) | Outcome::Skipped(s) => Some(s),
