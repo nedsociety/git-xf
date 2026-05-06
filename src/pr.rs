@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 
@@ -5,6 +6,7 @@ use anyhow::{bail, Result};
 
 use crate::cache::Cache;
 use crate::config::Config;
+use crate::git;
 
 /// Parse `url` as a GitHub remote URL and return `(org, repo)` with any
 /// trailing `.git` stripped.  Accepts HTTPS and SSH forms.
@@ -75,28 +77,14 @@ pub fn run(
 
     // Verify <branch> exists in the target cache.
     let branch_ref = format!("refs/heads/{branch}");
-    let branch_ok = Command::new("git")
-        .arg("-C")
-        .arg(&cache.path)
-        .args(["rev-parse", "--verify", &branch_ref])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !branch_ok {
+    if git::resolve_ref(&cache.path, &branch_ref).is_err() {
         bail!("branch '{branch}' not found in target repo for '{name}'");
     }
 
     // Verify <base> if provided.
     if let Some(ref b) = base {
         let base_ref = format!("refs/heads/{b}");
-        let base_ok = Command::new("git")
-            .arg("-C")
-            .arg(&cache.path)
-            .args(["rev-parse", "--verify", &base_ref])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !base_ok {
+        if git::resolve_ref(&cache.path, &base_ref).is_err() {
             bail!("base branch '{b}' not found in target repo for '{name}'");
         }
     }
@@ -123,7 +111,6 @@ pub fn run(
     };
 
     // Open if interactive TTY and opener is available; otherwise print.
-    use std::io::IsTerminal;
     if std::io::stdout().is_terminal() && try_open(&compare_url) {
         return Ok(());
     }

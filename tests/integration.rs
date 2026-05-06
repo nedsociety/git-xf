@@ -1900,7 +1900,7 @@ fn test_diff_two_commit_form() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("b.txt") || stdout.contains("c.txt"),
+        stdout.contains("b.txt") && stdout.contains("c.txt"),
         "expected diff output: {stdout}"
     );
 }
@@ -2094,6 +2094,22 @@ fn test_diff_err_both_unmapped() {
     assert!(
         stderr.contains("no mapping"),
         "expected 'no mapping': {stderr}"
+    );
+}
+
+/// All non-flag tokens fail rev-parse: error mentions "no revision".
+#[test]
+fn test_diff_err_no_revision_args() {
+    let env = Env::new(passthrough_config());
+    env.commit("first", &[("a.txt", "aaa")]);
+    env.sync(&[]);
+
+    let out = env.run_diff(&["--name-only"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no revision"),
+        "expected 'no revision': {stderr}"
     );
 }
 

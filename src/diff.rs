@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -7,12 +8,14 @@ use crate::cache::Cache;
 use crate::config::Config;
 use crate::git;
 
-/// A revision token found in the arg list.
+/// A revision token found in the arg list, with SHAs pre-resolved.
 struct RevToken {
     /// Index in `options_and_revs` where this token lives.
     idx: usize,
     lhs: String,
+    lhs_sha: String,
     rhs: Option<String>,
+    rhs_sha: Option<String>,
     /// "" | ".." | "..."
     sep: &'static str,
 }
@@ -45,7 +48,7 @@ fn verify_ref(repo: &Path, refname: &str) -> Result<String> {
 /// Walk `options_and_revs`, skip `-`-prefixed tokens, try each remaining
 /// token as a revision spec (possibly containing `..` or `...`).
 ///
-/// Returns the list of matched `RevToken`s (at most 2).
+/// Returns the list of matched `RevToken`s (at most 2) with SHAs resolved.
 fn find_rev_tokens(repo: &Path, options_and_revs: &[String]) -> Result<Vec<RevToken>> {
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -59,20 +62,24 @@ fn find_rev_tokens(repo: &Path, options_and_revs: &[String]) -> Result<Vec<RevTo
         if let Some((pos, sep)) = find_range_sep(tok) {
             let lhs = &tok[..pos];
             let rhs = &tok[pos + sep.len()..];
-            // Both halves must verify.
-            if verify_ref(repo, lhs).is_ok() && verify_ref(repo, rhs).is_ok() {
+            // Both halves must verify; store the resolved SHAs.
+            if let (Ok(lhs_sha), Ok(rhs_sha)) = (verify_ref(repo, lhs), verify_ref(repo, rhs)) {
                 tokens.push(RevToken {
                     idx: i,
                     lhs: lhs.to_string(),
+                    lhs_sha,
                     rhs: Some(rhs.to_string()),
+                    rhs_sha: Some(rhs_sha),
                     sep,
                 });
             }
-        } else if verify_ref(repo, tok).is_ok() {
+        } else if let Ok(sha) = verify_ref(repo, tok) {
             tokens.push(RevToken {
                 idx: i,
                 lhs: tok.to_string(),
+                lhs_sha: sha,
                 rhs: None,
+                rhs_sha: None,
                 sep: "",
             });
         }
@@ -116,90 +123,57 @@ pub fn run(
         None => (rest.clone(), vec![]),
     };
 
-    // Find revision tokens.
+    // Find revision tokens (SHAs pre-resolved).
     let rev_tokens = find_rev_tokens(source_repo, &options_and_revs)?;
     if rev_tokens.is_empty() {
         bail!("no revision arguments found");
     }
 
-    // Determine which refs to resolve and detect single-commit form.
+    // Single-commit form: validate clean working tree, resolve HEAD.
     let single_commit_form = rev_tokens.len() == 1 && rev_tokens[0].sep.is_empty();
-
-    // Validate single-commit preconditions and collect all (ref, position-info) pairs.
-    struct Side {
-        refname: String,
-        sha: String,
-        /// Index in `options_and_revs` and the sep/rhs to reconstruct.
-        token_idx: usize,
-        is_lhs: bool,
-    }
-
-    let mut sides: Vec<Side> = Vec::new();
-
-    if single_commit_form {
-        // Check working tree clean.
+    let head_sha = if single_commit_form {
         let status_out = Command::new("git")
             .arg("-C")
             .arg(source_repo)
             .args(["status", "--porcelain", "--untracked-files=no"])
             .output()?;
-        let status_text = String::from_utf8_lossy(&status_out.stdout);
-        if !status_text.trim().is_empty() {
+        if !String::from_utf8_lossy(&status_out.stdout)
+            .trim()
+            .is_empty()
+        {
             bail!(
                 "working tree is not clean; commit or stash all changes before using \
                  `git xf diff` with a single commit"
             );
         }
-        // Resolve HEAD.
-        let head_sha = git::resolve_ref(source_repo, "HEAD")?;
-        let commit_sha = verify_ref(source_repo, &rev_tokens[0].lhs)?;
-
-        sides.push(Side {
-            refname: rev_tokens[0].lhs.clone(),
-            sha: commit_sha,
-            token_idx: rev_tokens[0].idx,
-            is_lhs: true,
-        });
-        sides.push(Side {
-            refname: "HEAD".to_string(),
-            sha: head_sha,
-            // HEAD is not a token in options_and_revs; handled specially below.
-            token_idx: usize::MAX,
-            is_lhs: false,
-        });
+        Some(git::resolve_ref(source_repo, "HEAD")?)
     } else {
-        for tok in &rev_tokens {
-            let lhs_sha = verify_ref(source_repo, &tok.lhs)?;
-            sides.push(Side {
-                refname: tok.lhs.clone(),
-                sha: lhs_sha,
-                token_idx: tok.idx,
-                is_lhs: true,
-            });
-            if let Some(rhs) = &tok.rhs {
-                let rhs_sha = verify_ref(source_repo, rhs)?;
-                sides.push(Side {
-                    refname: rhs.clone(),
-                    sha: rhs_sha,
-                    token_idx: tok.idx,
-                    is_lhs: false,
-                });
-            }
-        }
-    }
+        None
+    };
 
     // Best-effort cache fetch.
     let cache = Cache::new(git_dir, &name);
     let fetch_failed = cache.fetch_and_prune().is_err();
 
-    // Look up mappings for every SHA.
-    let mut sha_to_target: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for side in &sides {
-        if sha_to_target.contains_key(&side.sha) {
+    // Collect (refname, source_sha) pairs to map, in traversal order.
+    let mut to_look_up: Vec<(&str, &str)> = Vec::new();
+    for tok in &rev_tokens {
+        to_look_up.push((&tok.lhs, &tok.lhs_sha));
+        if let (Some(rhs), Some(rhs_sha)) = (&tok.rhs, &tok.rhs_sha) {
+            to_look_up.push((rhs.as_str(), rhs_sha.as_str()));
+        }
+    }
+    if let Some(ref h) = head_sha {
+        to_look_up.push(("HEAD", h.as_str()));
+    }
+
+    // Look up target SHA for every source SHA.
+    let mut sha_to_target: HashMap<String, String> = HashMap::new();
+    for (refname, source_sha) in to_look_up {
+        if sha_to_target.contains_key(source_sha) {
             continue;
         }
-        let mapping_ref = cache.mapping_ref(&side.sha);
+        let mapping_ref = cache.mapping_ref(source_sha);
         let target_sha = Command::new("git")
             .arg("-C")
             .arg(&cache.path)
@@ -211,23 +185,19 @@ pub fn run(
 
         match target_sha {
             Some(t) => {
-                sha_to_target.insert(side.sha.clone(), t);
+                sha_to_target.insert(source_sha.to_string(), t);
             }
             None => {
                 let msg = if fetch_failed {
                     format!(
-                        "{sha} ({refname}) has no mapping for transformation '{name}'.\n\
+                        "{source_sha} ({refname}) has no mapping for transformation '{name}'.\n\
                          note: cache fetch failed — the mapping may exist in the remote.\n\
-                         If not, run `git xf sync` to transform it first.",
-                        sha = side.sha,
-                        refname = side.refname,
+                         If not, run `git xf sync` to transform it first."
                     )
                 } else {
                     format!(
-                        "{sha} ({refname}) has no mapping for transformation '{name}'; \
-                         run `git xf sync` to transform it first.",
-                        sha = side.sha,
-                        refname = side.refname,
+                        "{source_sha} ({refname}) has no mapping for transformation '{name}'; \
+                         run `git xf sync` to transform it first."
                     )
                 };
                 bail!("{}", msg);
@@ -235,39 +205,21 @@ pub fn run(
         }
     }
 
-    // Reconstruct the arg list with substituted SHAs.
+    // Reconstruct the arg list with substituted target SHAs.
     let mut reconstructed: Vec<String> = options_and_revs.clone();
     for tok in &rev_tokens {
-        let lhs_sha = &sides
-            .iter()
-            .find(|s| s.token_idx == tok.idx && s.is_lhs)
-            .unwrap()
-            .sha;
-        let target_lhs = sha_to_target[lhs_sha].as_str();
-
+        let target_lhs = &sha_to_target[&tok.lhs_sha];
         if tok.sep.is_empty() {
-            // Single-commit form: lhs token in reconstructed, HEAD appended after.
-            reconstructed[tok.idx] = target_lhs.to_string();
+            reconstructed[tok.idx] = target_lhs.clone();
         } else {
-            let rhs_sha = &sides
-                .iter()
-                .find(|s| s.token_idx == tok.idx && !s.is_lhs)
-                .unwrap()
-                .sha;
-            let target_rhs = sha_to_target[rhs_sha].as_str();
-            reconstructed[tok.idx] = format!("{target_lhs}{sep}{target_rhs}", sep = tok.sep);
+            let target_rhs = &sha_to_target[tok.rhs_sha.as_ref().unwrap()];
+            reconstructed[tok.idx] = format!("{target_lhs}{}{target_rhs}", tok.sep);
         }
     }
 
     // For single-commit form, append the mapped HEAD SHA.
-    if single_commit_form {
-        let head_sha = &sides
-            .iter()
-            .find(|s| s.token_idx == usize::MAX)
-            .unwrap()
-            .sha;
-        let target_head = sha_to_target[head_sha].as_str();
-        reconstructed.push(target_head.to_string());
+    if let Some(ref h) = head_sha {
+        reconstructed.push(sha_to_target[h].clone());
     }
 
     // Append paths (everything from `--` onward).
