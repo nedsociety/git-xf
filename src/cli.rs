@@ -73,6 +73,24 @@ pub enum Commands {
         #[command(subcommand)]
         command: HookCommands,
     },
+    /// Show diff between mapped commits in the target repository.
+    /// Usage: git xf diff [-x <transform>] [<diff-options>] <revisions> [-- <path>...]
+    /// -x <name> selects the transformation (required when more than one is configured).
+    /// -x must be the very first argument after `git xf diff` if present.
+    Diff {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Print the GitHub compare URL for a target-repo branch.
+    Pr {
+        /// Transformation name (required when more than one is configured)
+        #[arg(short = 'x', long = "transform")]
+        transform: Option<String>,
+        /// Branch to compare (must exist in target repo)
+        branch: String,
+        /// Base branch for comparison (default: target repo's default branch)
+        base: Option<String>,
+    },
     /// Print the git-xf version
     Version,
 }

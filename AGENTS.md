@@ -20,6 +20,8 @@ git xf init [--target <path>]
 git xf status [--branch <branch>]
 git xf hook install
 git xf hook uninstall
+git xf diff [-x <transform>] [<diff-options>] <revisions> [-- <path>...]
+git xf pr   [-x <transform>] <branch> [<base>]
 ```
 
 ### `git xf sync`
@@ -56,6 +58,39 @@ Shows, per named transformation, which commits on the branch are Mapped / Pendin
 ### `git xf hook install` / `git xf hook uninstall`
 
 Installs or removes a `pre-push` hook in `.git/hooks/`.
+
+### `git xf diff [-x <transform>] [<diff-options>] <revisions> [-- <path>...]`
+
+Runs `git diff` in the target cache repo, with source-repo revisions translated to their mapped target SHAs.
+
+**Argument parsing**: `-x <transform>` must be the very first argument when present — it is extracted by `main.rs` before clap sees the rest of the argv. Everything remaining is collected as a flat `Vec<String>` via clap's `trailing_var_arg`. The subcommand itself does not invoke clap for the inner arguments.
+
+**Revision detection** (implemented in `src/diff.rs`): The argument list is split on the first bare `--` into `options_and_revs` and `paths`. Token walking skips `-`-prefixed tokens, then calls `git rev-parse --verify` on each remaining token:
+- If the token contains `...` or `..` (three-dot checked first to avoid misparsing), both halves must verify; the token is treated as a range `RevToken`.
+- Otherwise, if the single token verifies, it is treated as a commit `RevToken`.
+- Tokens that fail `rev-parse` are silently left as-is (treated as bare path arguments before `--`).
+
+**Revision forms**:
+- Two separate commit tokens → two-commit form.
+- Single token with `..` or `...` → range form.
+- Single commit token with no separator → single-commit form: requires a clean working tree, appends the mapped `HEAD` SHA to the reconstructed argv so the diff is relative to parent.
+
+**SHA mapping**: All source SHAs from the rev tokens (and `HEAD` in single-commit form) are looked up via `refs/git-xf/<name>/<sha>` in the local cache. Missing mappings exit with an error; the message mentions a failed cache fetch if applicable.
+
+**Execution**: The reconstructed argv (with target SHAs substituted) is passed to `git diff` run inside the cache. The process exit code is forwarded via `std::process::exit`.
+
+### `git xf pr [-x <transform>] <branch> [<base>]`
+
+Opens or prints a GitHub compare URL for the transformed branch.
+
+**Implementation** (`src/pr.rs`):
+1. Selects the transformation (same single-or-named logic as other subcommands).
+2. Best-effort `fetch_and_prune` of the local cache.
+3. Verifies `<branch>` (and `<base>` if given) exist in the cache via `git::resolve_ref`.
+4. Reads `remote.origin.url` from the cache with `git config`.
+5. Parses the URL as a GitHub remote — supports HTTPS (`https://[user[:token]@]github.com/<org>/<repo>[.git]`) and SSH (`git@github.com:<org>/<repo>[.git]`). Non-GitHub targets exit with an error.
+6. Builds `https://github.com/<org>/<repo>/compare/<base>...<branch>` (or without `<base>` prefix when omitted).
+7. If stdout is a TTY (`std::io::IsTerminal`) and `open`/`xdg-open` spawns successfully, opens the URL in the browser (non-blocking). Otherwise prints it.
 
 ---
 
