@@ -63,10 +63,6 @@ impl Cache {
         Ok(())
     }
 
-    pub fn drop_blobs(&self) -> Result<()> {
-        git::repack_drop_blobs(&self.path)
-    }
-
     pub fn set_mapping(&self, source_sha: &str, target_sha: &str) -> Result<()> {
         git::update_ref(&self.path, &self.mapping_ref(source_sha), target_sha)
     }

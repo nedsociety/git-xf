@@ -200,16 +200,16 @@ A bare clone per named transformation at `.git/git-xf/<name>.git`.
 
 **Initial setup:**
 ```
-git clone --bare --filter=blob:none <target-url> .git/git-xf/<name>.git
+git clone --bare --filter=tree:0 <target-url> .git/git-xf/<name>.git
 git -C .git/git-xf/<name>.git config --add remote.origin.fetch \
   '+refs/git-xf/<name>/*:refs/git-xf/<name>/*'
 ```
 
-`--filter=blob:none` downloads commit and tree objects eagerly; blobs are promised and fetched on demand. Trees are kept local to maintain a consistent commit graph and avoid corruption during promisor fetches. Blobs are never needed in normal operation — unless `rule.copyParent` is true, in which case checking out the parent worktree fetches blobs from the promisor remote. After each sync that used `copyParent`, git-xf repacks the cache and discards the blob-only pack so accumulated blobs revert to promised status (requires git 2.38+). The extra fetch refspec is required because the default bare clone only fetches `refs/heads/*`; without it `git fetch` silently ignores all mapping refs and the cache always appears empty.
+`--filter=tree:0` downloads commit objects eagerly, tree/blob objects lazily. Sync never reads old target content in normal operation, so blobs are never needed — unless `rule.copyParent` is true, in which case git will lazily fetch the parent tree's blobs on demand when the parent worktree is checked out. The extra fetch refspec is required because the default bare clone only fetches `refs/heads/*`; without it `git fetch` silently ignores all mapping refs and the cache always appears empty.
 
 **On each sync run**, before anything else:
 ```
-git -C .git/git-xf/<name>.git fetch --filter=blob:none origin
+git -C .git/git-xf/<name>.git fetch --filter=tree:0 origin
 git -C .git/git-xf/<name>.git worktree prune
 ```
 
