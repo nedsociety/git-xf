@@ -173,7 +173,13 @@ fn transform_commit_inner(ctx: &TransformCtx) -> Result<Outcome> {
     };
     let _byot_guard = byot_dir.as_ref().map(|p| CleanupDir(p.clone()));
 
-    match run_rule(&ctx.name, &ctx.source_sha, &src_wt, effective_rule, byot_dir.as_deref()) {
+    match run_rule(
+        &ctx.name,
+        &ctx.source_sha,
+        &src_wt,
+        effective_rule,
+        byot_dir.as_deref(),
+    ) {
         Ok(()) => {}
         Err(stderr) => match ctx.config.ignore_error {
             IgnoreErrorPolicy::Error => {
@@ -318,11 +324,7 @@ fn read_commit_rule(repo: &Path, sha: &str, name: &str) -> std::result::Result<R
 }
 
 /// Applies the `missing` policy when the per-commit rule cannot be read.
-fn apply_missing_policy(
-    ctx: &TransformCtx,
-    info: &CommitInfo,
-    reason: &str,
-) -> Result<Outcome> {
+fn apply_missing_policy(ctx: &TransformCtx, info: &CommitInfo, reason: &str) -> Result<Outcome> {
     match ctx.config.missing {
         MissingPolicy::Error => Err(Error::MissingRule {
             name: ctx.name.clone(),
@@ -502,7 +504,10 @@ fn run_rule_streaming(
     log::trace!(
         "rule[{name}/{}]: exit={}",
         short(source_sha),
-        status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
+        status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".to_string())
     );
 
     if status.success() {
@@ -557,7 +562,11 @@ fn combine_streams(stdout: &str, stderr: &str) -> String {
 fn copy_output(src_wt: &Path, tgt_wt: &Path, output: Option<&OutputSpec>) -> Result<()> {
     let spec = match output {
         None => {
-            log::trace!("copy: {} → {} (whole worktree)", src_wt.display(), tgt_wt.display());
+            log::trace!(
+                "copy: {} → {} (whole worktree)",
+                src_wt.display(),
+                tgt_wt.display()
+            );
             return copy_recursive(src_wt, tgt_wt);
         }
         Some(s) => s,

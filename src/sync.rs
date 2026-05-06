@@ -224,10 +224,7 @@ async fn sync_one(
                             format!("{r}:{r}")
                         })
                         .collect();
-                    log::debug!(
-                        "sync[{name}]: pushing {} mapping refs",
-                        refspecs.len()
-                    );
+                    log::debug!("sync[{name}]: pushing {} mapping refs", refspecs.len());
                     blocking_push(cache.path.clone(), refspecs).await?;
 
                     current_known = post
@@ -289,10 +286,7 @@ async fn sync_one(
                             format!("{r}:{r}")
                         })
                         .collect();
-                    log::debug!(
-                        "sync[{name}]: pushing {} mapping refs",
-                        refspecs.len()
-                    );
+                    log::debug!("sync[{name}]: pushing {} mapping refs", refspecs.len());
                     blocking_push(cache.path.clone(), refspecs).await?;
 
                     pushed_target_shas

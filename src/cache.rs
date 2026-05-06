@@ -21,11 +21,7 @@ impl Cache {
 
     pub fn ensure_initialized(&self, target_url: &str) -> Result<()> {
         if self.path.exists() {
-            log::debug!(
-                "cache: '{}' already at {}",
-                self.name,
-                self.path.display()
-            );
+            log::debug!("cache: '{}' already at {}", self.name, self.path.display());
             // Verify the directory is actually a valid bare git repo.
             let out = Command::new("git")
                 .arg("-C")
@@ -43,11 +39,7 @@ impl Cache {
             self.ensure_fetch_refspec()?;
             return Ok(());
         }
-        log::debug!(
-            "cache: cloning {} → {}",
-            target_url,
-            self.path.display()
-        );
+        log::debug!("cache: cloning {} → {}", target_url, self.path.display());
         std::fs::create_dir_all(self.path.parent().unwrap())?;
         git::clone_bare(target_url, &self.path)?;
         self.ensure_fetch_refspec()?;

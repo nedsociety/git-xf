@@ -31,7 +31,11 @@ fn test_v_flag_enables_debug() {
     let env = Env::new(passthrough_config());
     env.commit("first", &[("a.txt", "a")]);
     let out = run_sync(&env, &["-v"], &[]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("cache: fetching"),
@@ -50,7 +54,11 @@ fn test_vv_flag_enables_trace_streaming() {
     let env = Env::new(streaming_config());
     env.commit("first", &[("a.txt", "a")]);
     let out = run_sync(&env, &["-vv"], &[]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("rule[") && stderr.contains(": command:"),
@@ -70,7 +78,11 @@ fn test_loglevel_env_enables_debug() {
     let env = Env::new(passthrough_config());
     env.commit("first", &[("a.txt", "a")]);
     let out = run_sync(&env, &[], &[("LOGLEVEL", "debug")]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("cache: fetching") && stderr.contains("transform["),
@@ -85,7 +97,11 @@ fn test_loglevel_flag_overrides_env() {
     let env = Env::new(passthrough_config());
     env.commit("first", &[("a.txt", "a")]);
     let out = run_sync(&env, &["--loglevel", "warn"], &[("LOGLEVEL", "trace")]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("transform[") && !stderr.contains("cache: fetching"),
@@ -104,7 +120,11 @@ fn test_default_no_debug_chatter() {
     let env = Env::new(passthrough_config());
     env.commit("first", &[("a.txt", "a")]);
     let out = run_sync(&env, &[], &[]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("transform["),
