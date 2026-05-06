@@ -306,6 +306,9 @@ async fn sync_one(
 
     if total_missing > 0 {
         eprintln!("[{name}] synced {} commit(s)", total_missing);
+        if cfg.rule.copy_parent {
+            cache.drop_blobs()?;
+        }
     }
     Ok(())
 }

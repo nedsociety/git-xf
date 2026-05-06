@@ -222,7 +222,7 @@ pub fn cat_file_blob(repo: &Path, sha: &str, path: &str) -> Result<Option<String
 pub fn clone_bare(target_url: &str, dest: &Path) -> Result<()> {
     run(
         Command::new("git")
-            .args(["clone", "--bare", "--filter=tree:0", target_url])
+            .args(["clone", "--bare", "--filter=blob:none", target_url])
             .arg(dest),
         dest,
     )?;
@@ -275,10 +275,64 @@ pub fn fetch(repo: &Path) -> Result<()> {
         Command::new("git")
             .arg("-C")
             .arg(repo)
-            .args(["fetch", "--filter=tree:0", "origin"]),
+            .args(["fetch", "--filter=blob:none", "origin"]),
         repo,
     )?;
     Ok(())
+}
+
+/// Repacks the repo excluding blobs, then deletes the blob-only pack so that
+/// blobs revert to "promised" status and are re-fetched from the promisor
+/// remote on next access. Requires git 2.38+.
+pub fn repack_drop_blobs(repo: &Path) -> Result<()> {
+    run(
+        Command::new("git").arg("-C").arg(repo).args([
+            "-c",
+            "pack.writeBitmaps=false",
+            "repack",
+            "-a",
+            "-d",
+            "--filter=blob:none",
+        ]),
+        repo,
+    )?;
+    // After repack, blobs live in a separate pack. Delete it — the promisor
+    // remote (extensions.partialClone) will re-fetch blobs on demand.
+    let pack_dir = repo.join("objects").join("pack");
+    for entry in std::fs::read_dir(&pack_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "idx") && pack_is_blob_only(&path)? {
+            let stem = path.with_extension("");
+            for ext in ["pack", "idx", "rev", "bitmap", "mtimes"] {
+                let _ = std::fs::remove_file(stem.with_extension(ext));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns true if every git object in the pack is a blob.
+fn pack_is_blob_only(idx: &Path) -> Result<bool> {
+    let out = Command::new("git")
+        .args(["verify-pack", "-v"])
+        .arg(idx)
+        .output()?;
+    if !out.status.success() {
+        return Ok(false);
+    }
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        // Object lines begin with a 40- or 64-char hex SHA; summary lines do not.
+        match parts.next() {
+            Some(s) if s.len() == 40 || s.len() == 64 => {}
+            _ => continue,
+        }
+        if parts.next().is_some_and(|t| t != "blob") {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Returns `(full_refname, commit_sha)` for all refs under `prefixes`.
