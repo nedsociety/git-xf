@@ -79,6 +79,19 @@ pub fn transform_commit(ctx: &TransformCtx) -> Result<Option<String>> {
         let p = byot_path(&ctx.git_dir, &ctx.name, &ctx.source_sha);
         let _ = std::fs::remove_dir_all(&p); // remove stale dir from a previous crash
         std::fs::create_dir_all(&p)?;
+        if effective_rule.copy_parent {
+            if let Some(first_parent) = ctx.target_parents.first() {
+                populate_byot_from_parent(
+                    &ctx.git_dir,
+                    &ctx.cache,
+                    &ctx.name,
+                    &ctx.source_sha,
+                    first_parent,
+                    &p,
+                )?;
+            }
+            // No parents → keep empty directory as usual.
+        }
         Some(p)
     } else {
         None
@@ -277,6 +290,28 @@ fn truncate(s: &str, max_chars: usize) -> &str {
         Some((idx, _)) => &s[..idx],
         None => s,
     }
+}
+
+/// Extracts the first target parent commit's tree into `byot_dir` by adding
+/// a temporary worktree in the cache, copying its contents, then removing it.
+fn populate_byot_from_parent(
+    git_dir: &Path,
+    cache: &Cache,
+    name: &str,
+    source_sha: &str,
+    target_parent_sha: &str,
+    byot_dir: &Path,
+) -> Result<()> {
+    let parent_wt = wt_path(git_dir, name, source_sha, "parent");
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&cache.path)
+        .args(["worktree", "remove", "--force"])
+        .arg(&parent_wt)
+        .output();
+    git::worktree_add(&cache.path, &parent_wt, target_parent_sha)?;
+    let _guard = WorktreeGuard::new(&cache.path, &parent_wt, false);
+    copy_recursive(&parent_wt, byot_dir)
 }
 
 fn wt_path(git_dir: &Path, name: &str, sha: &str, kind: &str) -> PathBuf {

@@ -107,6 +107,11 @@ pub struct RuleConfig {
     /// empty directory that `command` should populate. Mutually exclusive with `output`.
     #[serde(rename = "targetEnv")]
     pub target_env: Option<String>,
+    /// If true, populate the targetEnv directory with the first target parent
+    /// commit's tree before running the command. Requires `targetEnv` to be set.
+    /// Ignored (starts empty) when there is no parent (root commit).
+    #[serde(default, rename = "copyParent")]
+    pub copy_parent: bool,
 }
 
 // ── Policies ──────────────────────────────────────────────────────────────────
@@ -193,6 +198,9 @@ pub fn parse_rule(yaml: &str, name: &str) -> Result<RuleConfig> {
     if rule.output.is_some() && rule.target_env.is_some() {
         bail!("transformation '{name}': 'output' and 'targetEnv' cannot both be set");
     }
+    if rule.copy_parent && rule.target_env.is_none() {
+        bail!("transformation '{name}': 'copyParent' requires 'targetEnv' to be set");
+    }
 
     Ok(rule)
 }
@@ -213,6 +221,12 @@ pub fn load(repo_root: &Path) -> Result<Config> {
         if cfg.rule.output.is_some() && cfg.rule.target_env.is_some() {
             bail!(
                 "transformation {:?}: 'output' and 'targetEnv' cannot both be set",
+                name
+            );
+        }
+        if cfg.rule.copy_parent && cfg.rule.target_env.is_none() {
+            bail!(
+                "transformation {:?}: 'copyParent' requires 'targetEnv' to be set",
                 name
             );
         }

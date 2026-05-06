@@ -1217,3 +1217,158 @@ fn test_push_chunk_resume() {
     env.sync(&["--push-chunk=1"]);
     assert_eq!(env.target_commit_count("refs/heads/main"), 3);
 }
+
+// ── copyParent ────────────────────────────────────────────────────────────────
+
+/// `copyParent: true` pre-populates targetEnv with the first target parent's tree.
+/// The second commit's command sees the first commit's output already in $XF_TARGET.
+#[test]
+fn test_rule_byot_copy_parent() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: |
+               if [ -f \"$XF_TARGET/state.txt\" ]; then
+                 printf '%s+new' \"$(cat \"$XF_TARGET/state.txt\")\" > \"$XF_TARGET/state.txt\"
+               else
+                 printf 'init' > \"$XF_TARGET/state.txt\"
+               fi
+             targetEnv: XF_TARGET
+             copyParent: true
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("a.txt", "a")]);
+    env.commit("second", &[("b.txt", "b")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    // first commit: state.txt = "init"
+    // second commit: XF_TARGET pre-populated with first target tree → state.txt = "init+new"
+    let content = env.target_file_content(&tip, "state.txt");
+    assert_eq!(
+        content.trim(),
+        "init+new",
+        "copyParent should seed XF_TARGET with parent output: {content:?}"
+    );
+}
+
+/// `copyParent: true` on a root commit leaves targetEnv empty (no parent to copy).
+#[test]
+fn test_rule_byot_copy_parent_root_starts_empty() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: |
+               if [ -f \"$XF_TARGET/state.txt\" ]; then
+                 printf 'had-parent' > \"$XF_TARGET/result.txt\"
+               else
+                 printf 'no-parent' > \"$XF_TARGET/result.txt\"
+               fi
+             targetEnv: XF_TARGET
+             copyParent: true
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("root", &[("a.txt", "a")]);
+    env.sync(&[]);
+
+    let tip = env.target_ref_sha("refs/heads/main").unwrap();
+    let content = env.target_file_content(&tip, "result.txt");
+    assert_eq!(
+        content.trim(),
+        "no-parent",
+        "root commit with copyParent should start with empty targetEnv"
+    );
+}
+
+/// `copyParent: true` without `targetEnv` is a config validation error.
+#[test]
+fn test_rule_copy_parent_requires_target_env() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+             copyParent: true
+        ",
+    );
+    let env = Env::new(&config);
+    env.commit("first", &[("a.txt", "a")]);
+    let out = Command::new(BIN)
+        .current_dir(&env.source)
+        .arg("sync")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "sync should fail: copyParent requires targetEnv"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("copyParent") || stderr.contains("targetEnv"),
+        "error should mention the offending fields: {stderr}"
+    );
+}
+
+/// `copyParent: true` on a merge commit uses the first target parent's tree,
+/// not the second's.
+///
+/// Setup:
+/// - "first" branch adds `from-first.txt`; its target tree has marker.txt = "first-value".
+/// - "second" branch (off root) adds `from-second.txt`; target has marker.txt = "second-value".
+/// - Merge second INTO first (first = parent[0], second = parent[1]).
+///   Both source files coexist in the merge; the command records what was inherited
+///   before overwriting marker.txt with the latest source values.
+/// - If copyParent uses parent[0] (correct), `inherited.txt` = "first-value".
+/// - If it mistakenly uses parent[1],          `inherited.txt` = "second-value".
+#[test]
+fn test_rule_byot_copy_parent_merge_uses_first_parent() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: |
+               [ -f \"$XF_TARGET/marker.txt\" ] && cp \"$XF_TARGET/marker.txt\" \"$XF_TARGET/inherited.txt\" || true
+               [ -f from-first.txt ]  && cp from-first.txt  \"$XF_TARGET/marker.txt\" || true
+               [ -f from-second.txt ] && cp from-second.txt \"$XF_TARGET/marker.txt\" || true
+             targetEnv: XF_TARGET
+             copyParent: true
+        ",
+    );
+    let env = Env::new(&config);
+
+    // root (no marker files)
+    env.commit("root", &[("root.txt", "r")]);
+
+    // first branch: from-first.txt sets marker.txt = "first-value"
+    env.create_branch("first");
+    env.commit("first commit", &[("from-first.txt", "first-value")]);
+
+    // second branch off root: from-second.txt sets marker.txt = "second-value"
+    env.checkout("main");
+    env.create_branch("second");
+    env.commit("second commit", &[("from-second.txt", "second-value")]);
+
+    // merge second INTO first → first = parent[0], second = parent[1]
+    // No conflict: each branch added a different file.
+    env.checkout("first");
+    let merge_sha = env.merge_no_ff("second", "merge second into first");
+
+    env.sync(&["--rule=head"]);
+
+    let target_merge = env
+        .target_ref_sha(&format!("refs/git-xf/test/{merge_sha}"))
+        .expect("merge commit should be mapped");
+
+    // XF_TARGET was seeded from "first" parent's target (marker.txt = "first-value").
+    // The command captured that into inherited.txt before overwriting marker.txt.
+    let inherited = env.target_file_content(&target_merge, "inherited.txt");
+    assert_eq!(
+        inherited.trim(),
+        "first-value",
+        "copyParent on merge should seed XF_TARGET from first parent, not second: {inherited:?}"
+    );
+}
