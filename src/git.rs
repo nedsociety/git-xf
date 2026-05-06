@@ -7,6 +7,17 @@ use anyhow::Result;
 use crate::error::Error;
 
 fn run(cmd: &mut Command, repo: &Path) -> Result<String> {
+    if log::log_enabled!(log::Level::Trace) {
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        log::trace!(
+            "git: {} {}",
+            cmd.get_program().to_string_lossy(),
+            args.join(" ")
+        );
+    }
     let out = cmd.output().map_err(|e| Error::Git {
         repo: repo.display().to_string(),
         message: e.to_string(),
@@ -291,6 +302,10 @@ pub fn fetch(repo: &Path) -> Result<()> {
     )
     .is_err()
     {
+        log::debug!(
+            "cache: commit-graph verify failed at {} → re-fetching with --refetch",
+            repo.display()
+        );
         run(
             Command::new("git").arg("-C").arg(repo).args([
                 "fetch",

@@ -188,6 +188,20 @@ Prints (or opens) a GitHub compare URL for the given branch in the transformed t
 
 ---
 
+## Verbosity
+
+```sh
+git xf -v sync          # debug: per-step sync diagnostics
+git xf -vv sync         # trace: stream every rule command's stdout/stderr live
+LOGLEVEL=debug git xf sync
+```
+
+`--loglevel <error|warn|info|debug|trace>` sets the level explicitly. Precedence: `--loglevel` > `-v`/`-vv` > `LOGLEVEL` env var > default `info`. The flag must precede the subcommand (`git xf -vv sync`).
+
+`git xf diff` is special: `-v` and `--loglevel` after `diff` are forwarded to `git diff` rather than parsed by `git xf`. Use `LOGLEVEL=debug git xf diff ...` to raise verbosity for diff.
+
+---
+
 ## Automatic sync
 
 ### Pre-push hook

@@ -17,9 +17,58 @@ use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use cli::{Cli, Commands, HookCommands};
 
+fn resolve_loglevel(cli: &Cli) -> Result<log::LevelFilter> {
+    if let Some(s) = &cli.loglevel {
+        return parse_level(s);
+    }
+    if cli.verbose >= 2 {
+        return Ok(log::LevelFilter::Trace);
+    }
+    if cli.verbose == 1 {
+        return Ok(log::LevelFilter::Debug);
+    }
+    if let Ok(s) = std::env::var("LOGLEVEL") {
+        if !s.is_empty() {
+            return parse_level(&s);
+        }
+    }
+    Ok(log::LevelFilter::Info)
+}
+
+fn parse_level(s: &str) -> Result<log::LevelFilter> {
+    match s.to_ascii_lowercase().as_str() {
+        "error" => Ok(log::LevelFilter::Error),
+        "warn" => Ok(log::LevelFilter::Warn),
+        "info" => Ok(log::LevelFilter::Info),
+        "debug" => Ok(log::LevelFilter::Debug),
+        "trace" => Ok(log::LevelFilter::Trace),
+        other => bail!("invalid log level '{other}' (expected error|warn|info|debug|trace)"),
+    }
+}
+
+fn init_logger(level: log::LevelFilter) {
+    env_logger::Builder::new()
+        .filter_level(level)
+        .format(|buf, record| {
+            use std::io::Write;
+            match record.level() {
+                log::Level::Info => writeln!(buf, "{}", record.args()),
+                log::Level::Warn => writeln!(buf, "warning: {}", record.args()),
+                log::Level::Error => writeln!(buf, "error: {}", record.args()),
+                level => {
+                    let ts = buf.timestamp_millis();
+                    writeln!(buf, "[{ts} {level:5}] {}", record.args())
+                }
+            }
+        })
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let level = resolve_loglevel(&cli)?;
+    init_logger(level);
     match cli.command {
         Commands::Sync {
             dry_run,

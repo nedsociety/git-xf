@@ -28,6 +28,16 @@ fn parse_depth(s: &str) -> Result<usize, String> {
 #[derive(Parser)]
 #[command(name = "git-xf", about = "Transform git repositories commit-by-commit")]
 pub struct Cli {
+    /// Log verbosity. Overrides LOGLEVEL and -v/-vv. Must precede the subcommand.
+    #[arg(long, value_name = "LEVEL",
+          value_parser = ["error", "warn", "info", "debug", "trace"])]
+    pub loglevel: Option<String>,
+
+    /// Increase verbosity (-v = debug, -vv = trace). Must precede the subcommand.
+    /// Not accepted by `diff` (forwarded to `git diff` instead — use LOGLEVEL).
+    #[arg(short = 'v', action = clap::ArgAction::Count)]
+    pub verbose: u8,
+
     #[command(subcommand)]
     pub command: Commands,
 }

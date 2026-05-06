@@ -90,7 +90,7 @@ pub fn run(
     // Best-effort cache fetch.
     let cache = Cache::new(git_dir, &name);
     if let Err(e) = cache.fetch_and_prune() {
-        eprintln!("warning: cache fetch failed: {e}");
+        log::warn!("cache fetch failed: {e}");
     }
 
     // Verify <branch> exists in the target cache.

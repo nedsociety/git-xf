@@ -13,6 +13,8 @@ Typical use cases:
 ## Command-line interface
 
 ```
+git xf [--loglevel <level>] [-v|-vv] <subcommand> ...
+
 git xf sync [--dry-run] [--jobs <n>] [--rule <head|commit>]
             [--push-chunk <n|nB|nK|nM|nG>] [--depth <n>] [--all-branches]
             [<REF>...]
@@ -23,6 +25,20 @@ git xf hook uninstall
 git xf diff [-x <transform>] [<diff-options>] <revisions> [-- <path>...]
 git xf pr   [-x <transform>] <branch> [<base>]
 ```
+
+### Verbosity (`--loglevel` / `-v` / `LOGLEVEL`)
+
+Verbosity is controlled by a top-level flag or the `LOGLEVEL` env var. The flag must precede the subcommand (`git xf -vv sync`, not `git xf sync -vv`).
+
+- `--loglevel <error|warn|info|debug|trace>`: explicit level.
+- `-v` → `debug`. `-vv` (or more) → `trace`.
+- `LOGLEVEL` env var: same five string values, case-insensitive.
+
+Precedence (highest wins): `--loglevel` > `-v`/`-vv` > `LOGLEVEL` > default `info`.
+
+`git xf diff` does **not** accept `-v`/`--loglevel` — those tokens are forwarded verbatim to `git diff` (which has its own `-v`). Use `LOGLEVEL=debug git xf diff ...` to raise verbosity for diff.
+
+`debug` adds per-step sync diagnostics (cache fetch, missing-set summary, chunk dispatch, push counts, per-commit start/outcome). `trace` additionally streams every rule command's stdout/stderr line-by-line as it is produced, plus every git invocation and top-level file copy.
 
 ### `git xf sync`
 
@@ -376,6 +392,7 @@ Authoritative sync path — runs for all contributors, cannot be bypassed. Pre-p
 - Config: `serde` + `serde_yaml`.
 - CLI: `clap` with derive macros.
 - Parallelism: `tokio` with a `Semaphore` bounding concurrent worktrees.
+- Logging: `log` facade with `env_logger` subscriber. INFO/WARN/ERROR render as bare text (drop-in for the prior `eprintln!` style); DEBUG/TRACE add a `[timestamp LEVEL]` prefix so concurrent per-commit lines stay legible.
 - Binary name: `git-xf` (git resolves `git xf` to it when on `$PATH`).
 - Error messages must include: source commit SHA, transformation name, raw command stderr.
 
