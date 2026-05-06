@@ -159,6 +159,29 @@ Shows the mapping state (Mapped / Pending / Failed) for each commit on `<branch>
 
 Installs or removes a `pre-push` hook that calls `git xf sync` automatically before each push to a whitelisted branch.
 
+### `git xf diff [-x <transform>] [<diff-options>] <revisions> [-- <path>...]`
+
+Runs `git diff` against the **transformed** (target) repository using the local cache. Revision arguments are resolved in the source repo and mapped to their corresponding target SHAs; the diff itself is then executed in the cache.
+
+Supported revision forms:
+- `<sha1> <sha2>` — two separate commits
+- `<sha1>..<sha2>` — two-dot range
+- `<sha1>...<sha2>` — three-dot merge-base range
+- `<sha1>` alone — diff the transformed commit against its parent (requires a clean working tree)
+
+The `-x <transform>` flag, when needed, **must be the first argument** (before any diff options).
+
+A best-effort cache fetch is attempted before resolving SHAs. If a commit has not been synced yet, the command exits with an error and a hint to run `git xf sync`.
+
+### `git xf pr [-x <transform>] <branch> [<base>]`
+
+Prints (or opens) a GitHub compare URL for the given branch in the transformed target repository.
+
+- If `<base>` is supplied, the URL is `…/compare/<base>…<branch>`; otherwise `…/compare/<branch>`.
+- When stdout is an interactive TTY and `open`/`xdg-open` is available, the URL is opened in the browser instead of printed.
+- Both HTTPS (`https://[user[:token]@]github.com/…`) and SSH (`git@github.com:…`) remote URLs are supported.
+- Both `<branch>` and `<base>` must exist in the target cache; run `git xf sync` first if they are missing.
+
 ---
 
 ## Automatic sync
