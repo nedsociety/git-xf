@@ -272,19 +272,6 @@ For each source commit, `git xf sync`:
 
 ---
 
-## Releasing
-
-Releases are managed with [`cargo-release`](https://github.com/crate-ci/cargo-release).
-
-```sh
-cargo release patch          # dry-run preview (or: minor, major)
-cargo release patch --execute
-```
-
-This bumps the version in `Cargo.toml`, commits, tags, and pushes. The CI release workflow picks up the tag and builds binaries automatically.
-
----
-
 ## License
 
 MIT
