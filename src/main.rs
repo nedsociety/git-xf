@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
             push_chunk,
             depth,
             all_branches,
+            tips_only,
             refs,
         } => {
             let (source_repo, git_dir) = locate_repo()?;
@@ -44,6 +45,7 @@ async fn main() -> Result<()> {
                 push_chunk,
                 depth,
                 all_branches,
+                tips_only,
             )
             .await?;
         }
