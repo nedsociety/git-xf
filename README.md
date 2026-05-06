@@ -147,6 +147,7 @@ Transforms all commits reachable from each REF (default: `HEAD`) that have not y
 - `--push-chunk <n|nB|nK|nM|nG>` — push mapping refs incrementally after every N commits or N bytes of new loose objects (default: `50M`). Use `0` to push everything at the end.
 - `--depth <n>` — limit sync to commits within BFS distance `n` from the tips (≥ 1). Boundary commits become synthetic roots in the target.
 - `--all-branches` — use all `refs/heads/*` as tips instead of explicit REFs. Cannot be combined with explicit REF arguments.
+- `--tips-only` — transform only the REF arguments (the requested traversal roots); non-tip ancestors missing from the cache are treated as changeless without running the rule or reading `.git-xf.yaml`. The `changeless` policy applies directly: non-merge commits are skipped or produce an empty-content commit depending on the `changeless` setting; merge commits produce a real target commit carrying the first target parent's tree to preserve topology. Because the short-circuit fires before all other per-commit checks, `skip-commit-messages` and the `missing` policy are also not applied to non-tip commits. Useful for a fast initial sync when only the current tip state matters, at the cost of incomplete ancestry in the target repository.
 
 After the sync, every `refs/heads/*` and `refs/tags/*` in the source whose tip commit has a mapping is mirrored to the target.
 
