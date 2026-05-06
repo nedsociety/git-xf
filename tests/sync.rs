@@ -1372,3 +1372,143 @@ fn test_rule_byot_copy_parent_merge_uses_first_parent() {
         "copyParent on merge should seed XF_TARGET from first parent, not second: {inherited:?}"
     );
 }
+
+// ── --tips-only ───────────────────────────────────────────────────────────────
+
+/// `--tips-only` with `changeless: skip`: non-tip middle commit maps to the
+/// already-cached root's target SHA (skip_to_parent, rule not run), while the
+/// tip is fully transformed.
+///
+/// Root is pre-synced so it is already in the cache — this is the typical
+/// `--tips-only` use case: history is partially synced, only new tips need to
+/// be brought up to date quickly.
+#[test]
+fn test_tips_only_linear_changeless_skip() {
+    let config =
+        "test:\n  target: ../target.git\n  rule:\n    command: \"true\"\n  changeless: skip\n";
+    let env = Env::new(config);
+
+    // Pre-sync root so it is cached.
+    let sha_root = env.commit("root", &[("a.txt", "a")]);
+    env.sync(&[]);
+
+    // Add middle (non-tip) and tip after the cached root.
+    let sha_mid = env.commit("middle", &[("b.txt", "b")]);
+    let sha_tip = env.commit("tip", &[("c.txt", "c")]);
+
+    env.sync(&["--tips-only"]);
+
+    let root_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_root}"))
+        .expect("root should be mapped");
+    let mid_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_mid}"))
+        .expect("middle should be mapped");
+    let tip_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_tip}"))
+        .expect("tip should be mapped");
+
+    // Middle is assumed changeless: skip_to_parent maps it to root's target.
+    assert_eq!(
+        root_target, mid_target,
+        "middle should map to root's target (changeless:skip, rule not run)"
+    );
+    // Tip is fully transformed and gets its own target commit.
+    assert_ne!(tip_target, mid_target, "tip should have its own target commit");
+
+    // Tip's full worktree (a, b, c) is in the target.
+    assert!(
+        env.target_tree_files(&tip_target).contains(&"c.txt".to_string()),
+        "tip's target should contain c.txt (rule ran)"
+    );
+}
+
+/// `--tips-only` with a non-tip merge commit: the merge exception applies,
+/// creating a target commit that carries all source-parent edges (topology
+/// preserved) while carrying the first target parent's tree content.
+#[test]
+fn test_tips_only_non_tip_merge_preserves_topology() {
+    // Default changeless: empty-commit so non-tip commits each get their own
+    // target commit object (needed for distinct parent SHAs on the merge).
+    let env = Env::new(passthrough_config());
+
+    env.commit("root", &[("root.txt", "r")]);
+    env.create_branch("side");
+    env.commit("side commit", &[("side.txt", "s")]);
+    env.checkout("main");
+    env.commit("main advance", &[("main.txt", "m")]);
+    let merge_sha = env.merge_no_ff("side", "merge side into main");
+    let sha_tip = env.commit("tip after merge", &[("tip.txt", "t")]);
+
+    env.sync(&["--tips-only"]);
+
+    // Merge commit is mapped.
+    let merge_mapping = format!("refs/git-xf/test/{merge_sha}");
+    let target_merge = env
+        .target_ref_sha(&merge_mapping)
+        .expect("non-tip merge commit should be mapped");
+
+    // Merge exception: two target parents preserved (topology intact).
+    assert_eq!(
+        env.target_parent_count(&target_merge),
+        2,
+        "non-tip merge commit should have 2 target parents under --tips-only"
+    );
+
+    // Tip is fully transformed and has the merge commit as its single parent.
+    let tip_mapping = format!("refs/git-xf/test/{sha_tip}");
+    let target_tip = env
+        .target_ref_sha(&tip_mapping)
+        .expect("tip should be mapped");
+    assert_eq!(
+        env.target_parent_count(&target_tip),
+        1,
+        "tip should have exactly one parent (the merge commit)"
+    );
+    // Tip's own file is present in the target (rule did run for it).
+    assert!(
+        env.target_tree_files(&target_tip).contains(&"tip.txt".to_string()),
+        "tip.txt should be in tip's target tree (rule ran)"
+    );
+}
+
+/// `--tips-only` bypasses `skip-commit-messages` for non-tip commits.
+/// A non-tip commit whose message contains a skip pattern gets changeless
+/// treatment (empty-content commit) rather than being message-skipped to its
+/// parent's target SHA.
+#[test]
+fn test_tips_only_bypasses_skip_commit_messages() {
+    let config = indoc(
+        "test:
+           target: ../target.git
+           rule:
+             command: 'true'
+           skip-commit-messages:
+             - '[skip-xf]'
+        ",
+    );
+    let env = Env::new(&config);
+
+    let sha_root = env.commit("root", &[("a.txt", "a")]);
+    let sha_mid = env.commit("middle [skip-xf]", &[("b.txt", "b")]);
+    let _sha_tip = env.commit("tip", &[("c.txt", "c")]);
+
+    env.sync(&["--tips-only"]);
+
+    let root_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_root}"))
+        .expect("root should be mapped");
+    let mid_target = env
+        .target_ref_sha(&format!("refs/git-xf/test/{sha_mid}"))
+        .expect("middle should be mapped even with [skip-xf] message under --tips-only"
+        );
+
+    // Under --tips-only the message is never checked: middle gets
+    // changeless:empty-commit (default), creating a new target commit rather
+    // than being collapsed to root's SHA.
+    assert_ne!(
+        root_target, mid_target,
+        "skip-commit-messages must not apply to non-tip commits under --tips-only; \
+         middle should get its own empty-content commit"
+    );
+}

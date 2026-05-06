@@ -152,8 +152,15 @@ async fn sync_one(
             return Ok(());
         }
         println!("[{name}] would transform {} commit(s):", missing.len());
+        let dry_tip_set: HashSet<&str> =
+            tip_shas.iter().map(|s| s.as_str()).collect();
         for sha in topo_order(&missing) {
-            println!("  {sha}");
+            let label = if tips_only && !dry_tip_set.contains(sha.as_str()) {
+                " (changeless)"
+            } else {
+                ""
+            };
+            println!("  {sha}{label}");
         }
         return Ok(());
     }
