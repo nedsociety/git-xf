@@ -81,6 +81,16 @@ pub enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Print the GitHub compare URL for a target-repo branch.
+    Pr {
+        /// Transformation name (required when more than one is configured)
+        #[arg(short = 'x', long = "transform")]
+        transform: Option<String>,
+        /// Branch to compare (must exist in target repo)
+        branch: String,
+        /// Base branch for comparison (default: target repo's default branch)
+        base: Option<String>,
+    },
     /// Print the git-xf version
     Version,
 }

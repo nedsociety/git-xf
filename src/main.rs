@@ -6,6 +6,7 @@ mod error;
 mod git;
 mod hook;
 mod init;
+mod pr;
 mod status;
 mod sync;
 mod transform;
@@ -55,6 +56,15 @@ async fn main() -> Result<()> {
             let (source_repo, git_dir) = locate_repo()?;
             let config = config::load(&source_repo)?;
             status::run(&source_repo, &git_dir, &config, branch.as_deref())?;
+        }
+        Commands::Pr {
+            transform,
+            branch,
+            base,
+        } => {
+            let (source_repo, git_dir) = locate_repo()?;
+            let config = config::load(&source_repo)?;
+            pr::run(&git_dir, &config, transform, branch, base)?;
         }
         Commands::Diff { args } => {
             let (transform, rest) = match args.first().map(|s| s.as_str()) {
