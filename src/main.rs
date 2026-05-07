@@ -55,10 +55,7 @@ fn init_logger(level: log::LevelFilter) {
                 log::Level::Info => writeln!(buf, "{}", record.args()),
                 log::Level::Warn => writeln!(buf, "warning: {}", record.args()),
                 log::Level::Error => writeln!(buf, "error: {}", record.args()),
-                level => {
-                    let ts = buf.timestamp_millis();
-                    writeln!(buf, "[{ts} {level:5}] {}", record.args())
-                }
+                level => writeln!(buf, "[{level:5}] {}", record.args()),
             }
         })
         .init();
