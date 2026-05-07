@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+env_logger = { version = "0.11", default-features = false }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
