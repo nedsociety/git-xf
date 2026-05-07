@@ -172,10 +172,19 @@ async fn sync_one(
 
     let total_missing = missing.len();
     if total_missing > 0 {
-        log::info!("[{name}] transforming {} commit(s)...", total_missing);
-
         let config_arc = Arc::new(cfg.clone());
         let tip_set = Arc::new(tip_shas.iter().cloned().collect::<HashSet<String>>());
+
+        let transform_count = if tips_only {
+            missing.iter().filter(|(sha, _)| tip_set.contains(sha.as_str())).count()
+        } else {
+            total_missing
+        };
+        if tips_only {
+            log::info!("[{name}] transforming {transform_count} commit(s) ({total_missing} total with changeless)...");
+        } else {
+            log::info!("[{name}] transforming {transform_count} commit(s)...");
+        }
         let make_ctx = || DispatchCtx {
             source_repo: source_repo.to_path_buf(),
             git_dir: git_dir.to_path_buf(),
