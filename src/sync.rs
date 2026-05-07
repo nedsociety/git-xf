@@ -176,7 +176,10 @@ async fn sync_one(
         let tip_set = Arc::new(tip_shas.iter().cloned().collect::<HashSet<String>>());
 
         let transform_count = if tips_only {
-            missing.iter().filter(|(sha, _)| tip_set.contains(sha.as_str())).count()
+            missing
+                .iter()
+                .filter(|(sha, _)| tip_set.contains(sha.as_str()))
+                .count()
         } else {
             total_missing
         };
