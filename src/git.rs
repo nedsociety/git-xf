@@ -424,9 +424,19 @@ pub fn commit_subjects(repo: &Path, shas: &[&str]) -> Result<HashMap<String, Str
 
 /// Returns SHAs of all objects reachable from `include` but not from `exclude`.
 /// Each output line's first whitespace-delimited token is the SHA.
+///
+/// GIT_NO_LAZY_FETCH=1 prevents promisor fetches for missing tree/blob objects
+/// (defaults to 1 only in upload-pack; client-side default is 0). The cache is
+/// a --filter=tree:0 partial clone so most trees/blobs are absent. Without this,
+/// rev-list fetches them one by one from the remote, causing multi-minute hangs.
+/// --missing=allow-any silently skips them; absent objects contribute 0 to
+/// loose_object_size anyway.
 pub fn rev_list_objects(repo: &Path, include: &[&str], exclude: &[&str]) -> Result<Vec<String>> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(["rev-list", "--objects"]);
+    cmd.env("GIT_NO_LAZY_FETCH", "1");
+    cmd.arg("-C")
+        .arg(repo)
+        .args(["rev-list", "--objects", "--missing=allow-any"]);
     for sha in include {
         cmd.arg(sha);
     }
